@@ -1,0 +1,20 @@
+{
+  "name": "chickenshop",
+  "version": "0.1.0",
+  "description": "A Codex-inspired Electron IDE shell.",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/fix-node-pty-permissions.js",
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "41.3.0"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  }
+}

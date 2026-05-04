@@ -1,0 +1,334 @@
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const fs = require("fs/promises");
+const path = require("path");
+
+let mainWindow;
+let terminalCounter = 0;
+let pty;
+let ptyLoadError;
+
+try {
+  pty = require("node-pty");
+} catch (error) {
+  ptyLoadError = error;
+}
+
+const terminalProcesses = new Map();
+
+const ignoredDirectories = new Set([
+  ".git",
+  ".next",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out"
+]);
+
+const ignoredFiles = new Set([".DS_Store"]);
+
+function shouldIgnoreEntry(name, isDirectory) {
+  if (isDirectory) return ignoredDirectories.has(name);
+  return ignoredFiles.has(name);
+}
+
+async function scanDirectory(directoryPath, { depth = 0, counter }) {
+  if (depth > 10 || counter.count > 1200) return [];
+
+  let entries;
+  try {
+    entries = await fs.readdir(directoryPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  entries = entries
+    .filter((entry) => !shouldIgnoreEntry(entry.name, entry.isDirectory()))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) {
+        return a.isDirectory() ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+
+  const children = [];
+
+  for (const entry of entries) {
+    if (counter.count > 1200) break;
+    const entryPath = path.join(directoryPath, entry.name);
+
+    if (entry.isSymbolicLink()) continue;
+
+    if (entry.isDirectory()) {
+      counter.count += 1;
+      children.push({
+        type: "directory",
+        name: entry.name,
+        path: entryPath,
+        children: await scanDirectory(entryPath, {
+          depth: depth + 1,
+          counter
+        })
+      });
+      continue;
+    }
+
+    if (entry.isFile()) {
+      counter.count += 1;
+      children.push({
+        type: "file",
+        name: entry.name,
+        path: entryPath
+      });
+    }
+  }
+
+  return children;
+}
+
+async function buildProject(directoryPath) {
+  const rootPath = path.resolve(directoryPath);
+  return {
+    type: "directory",
+    name: path.basename(rootPath) || rootPath,
+    path: rootPath,
+    children: await scanDirectory(rootPath, {
+      counter: { count: 0 }
+    })
+  };
+}
+
+async function readProjectFile(filePath) {
+  const resolvedPath = path.resolve(filePath);
+  const stat = await fs.stat(resolvedPath);
+
+  if (!stat.isFile()) {
+    throw new Error("Selected path is not a file.");
+  }
+
+  if (stat.size > 2 * 1024 * 1024) {
+    return {
+      name: path.basename(resolvedPath),
+      path: resolvedPath,
+      content: "This file is larger than 2 MB, so it was not loaded into the preview editor.",
+      readonly: true
+    };
+  }
+
+  const buffer = await fs.readFile(resolvedPath);
+  const hasBinaryByte = buffer.subarray(0, 4096).includes(0);
+
+  return {
+    name: path.basename(resolvedPath),
+    path: resolvedPath,
+    content: hasBinaryByte
+      ? "Binary file preview is not supported yet."
+      : buffer.toString("utf8"),
+    readonly: hasBinaryByte
+  };
+}
+
+function getDefaultProjectPath() {
+  return path.resolve(__dirname, "..");
+}
+
+function sendTerminalPayload(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(channel, payload);
+}
+
+function disposeTerminal(id) {
+  const terminal = terminalProcesses.get(id);
+  if (!terminal) return;
+
+  terminalProcesses.delete(id);
+
+  try {
+    terminal.process.kill();
+  } catch {
+    // The process may already be gone by the time the app is closing.
+  }
+}
+
+function disposeAllTerminals() {
+  for (const id of terminalProcesses.keys()) {
+    disposeTerminal(id);
+  }
+}
+
+function createTerminal({ cols = 120, rows = 30 } = {}) {
+  if (!pty) {
+    throw new Error(
+      `Real terminal backend failed to load.${ptyLoadError ? ` ${ptyLoadError.message}` : ""}`
+    );
+  }
+
+  const cwd = getDefaultProjectPath();
+  const id = `terminal-${++terminalCounter}`;
+  const shell = process.env.SHELL || "/bin/zsh";
+  const terminalProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd,
+    env: {
+      ...process.env,
+      COLORTERM: "truecolor",
+      TERM: "xterm-256color",
+      TERM_PROGRAM: "chickenshop"
+    }
+  });
+
+  terminalProcesses.set(id, {
+    id,
+    process: terminalProcess
+  });
+
+  terminalProcess.onData((data) => {
+    sendTerminalPayload("terminal:data", { id, data });
+  });
+
+  terminalProcess.onExit(({ exitCode }) => {
+    terminalProcesses.delete(id);
+    sendTerminalPayload("terminal:exit", { id, code: exitCode });
+  });
+
+  return {
+    id,
+    cwd,
+    name: path.basename(cwd) || "terminal"
+  };
+}
+
+function publishWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  mainWindow.webContents.send("window:state", {
+    expanded: mainWindow.isFullScreen()
+  });
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1320,
+    height: 860,
+    minWidth: 860,
+    minHeight: 560,
+    backgroundColor: "#f6eadf",
+    frame: false,
+    resizable: true,
+    show: false,
+    title: "chickenshop",
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 18, y: 22 },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const isSidebarShortcut =
+      (input.meta || input.control) &&
+      !input.alt &&
+      !input.shift &&
+      input.key.toLowerCase() === "b";
+
+    if (!isSidebarShortcut) return;
+    event.preventDefault();
+    mainWindow.webContents.send("sidebar:toggle");
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+    publishWindowState();
+  });
+
+  mainWindow.on("maximize", publishWindowState);
+  mainWindow.on("unmaximize", publishWindowState);
+  mainWindow.on("enter-full-screen", publishWindowState);
+  mainWindow.on("leave-full-screen", publishWindowState);
+  mainWindow.on("restore", publishWindowState);
+}
+
+app.whenReady().then(() => {
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on("window-all-closed", () => {
+  disposeAllTerminals();
+
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});
+
+app.on("before-quit", disposeAllTerminals);
+
+ipcMain.handle("window:minimize", () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle("window:toggle-maximize", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+    return;
+  }
+  mainWindow.maximize();
+});
+
+ipcMain.handle("window:close", () => {
+  mainWindow?.close();
+});
+
+ipcMain.handle("window:get-state", () => ({
+  expanded: mainWindow?.isFullScreen() ?? false
+}));
+
+ipcMain.handle("project:get-default", () => buildProject(getDefaultProjectPath()));
+
+ipcMain.handle("project:open-folder", async () => {
+  if (!mainWindow) return null;
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    buttonLabel: "Open Project",
+    message: "Choose a project folder",
+    properties: ["openDirectory"]
+  });
+
+  if (result.canceled || !result.filePaths[0]) return null;
+  return buildProject(result.filePaths[0]);
+});
+
+ipcMain.handle("project:read-file", (_event, filePath) => readProjectFile(filePath));
+
+ipcMain.handle("terminal:create", (_event, size) => createTerminal(size));
+
+ipcMain.handle("terminal:write", (_event, { id, data }) => {
+  const terminal = terminalProcesses.get(id);
+  if (!terminal) return false;
+  terminal.process.write(data);
+  return true;
+});
+
+ipcMain.handle("terminal:resize", (_event, { id, cols, rows }) => {
+  const terminal = terminalProcesses.get(id);
+  if (!terminal) return false;
+  terminal.process.resize(cols, rows);
+  return true;
+});
+
+ipcMain.handle("terminal:dispose", (_event, id) => {
+  disposeTerminal(id);
+  return true;
+});

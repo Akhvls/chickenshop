@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chickenshop</title>
+    <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="editor-topbar">
+        <div class="window-drag-strip">
+          <div class="traffic-spacer" aria-hidden="true"></div>
+          <button
+            class="icon-button sidebar-toggle"
+            type="button"
+            aria-label="Toggle sidebar"
+            aria-expanded="true"
+            data-sidebar-toggle
+          >
+            <img class="ui-icon" src="./assets/icons/sidebar.png" alt="" aria-hidden="true" />
+          </button>
+          <div class="nav-arrows" aria-label="Navigation">
+            <button class="icon-button" type="button" aria-label="Back">
+              <img class="ui-icon" src="./assets/icons/back.png" alt="" aria-hidden="true" />
+            </button>
+            <button class="icon-button muted" type="button" aria-label="Forward">
+              <img class="ui-icon" src="./assets/icons/forward.png" alt="" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-tabs" role="tablist" aria-label="Open files" data-open-tabs></div>
+
+        <div class="linux-window-controls">
+          <button type="button" aria-label="Minimize" data-window-action="minimize"></button>
+          <button type="button" aria-label="Maximize" data-window-action="maximize"></button>
+          <button type="button" aria-label="Close" data-window-action="close"></button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <nav class="primary-nav" aria-label="Primary">
+          <button class="nav-item active" type="button">
+            <img class="ui-icon nav-icon" src="./assets/icons/plus.png" alt="" aria-hidden="true" />
+            <span>New file</span>
+          </button>
+          <button class="nav-item" type="button">
+            <img class="ui-icon nav-icon" src="./assets/icons/eye.png" alt="" aria-hidden="true" />
+            <span>Search</span>
+          </button>
+        </nav>
+
+        <section class="sidebar-section terminal-section" aria-label="Terminals">
+          <div class="section-heading">
+            <span>Terminals</span>
+            <button class="tiny-button terminal-add" type="button" aria-label="Add terminal">
+              <svg class="ui-icon terminal-add-icon" viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M3.25 4.25h7.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2h-7.5a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z" />
+                <path d="m4.25 7 1.75 1.5-1.75 1.5" />
+                <path d="M7.25 10.25h2.5" />
+                <path d="M13.75 2.25v4" />
+                <path d="M11.75 4.25h4" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="terminal-list" data-terminal-list></div>
+        </section>
+
+        <section class="sidebar-section project-section">
+          <div class="section-heading">
+            <span>Projects</span>
+            <button class="tiny-button project-add" type="button" aria-label="Add new project" data-open-project>
+              <img class="ui-icon" src="./assets/icons/folder-plus.png" alt="" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div class="project-tree" aria-label="Projects" data-project-tree></div>
+        </section>
+
+        <div class="sidebar-bottom">
+          <button class="nav-item" type="button">
+            <img class="ui-icon nav-icon" src="./assets/icons/settings.png" alt="" aria-hidden="true" />
+            <span>Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="editor-shell" aria-label="Editor surface" data-viewer-host>
+          <section class="home-pane active" aria-label="chickenshop home" data-home-pane>
+            <div class="home-content">
+              <img
+                class="home-logo"
+                src="./assets/brand/chickenshop-logo.png"
+                alt=""
+                aria-hidden="true"
+              />
+              <h1>chickenshop</h1>
+              <dl class="shortcut-list" aria-label="Keyboard shortcuts">
+                <div class="shortcut-row">
+                  <dt>toggle sidebar</dt>
+                  <dd>
+                    <kbd>Command</kbd>
+                    <span aria-hidden="true">+</span>
+                    <kbd>B</kbd>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </section>
+
+          <div class="viewer-pane text-viewer" data-viewer-panel="text">
+            <div class="text-editor" data-text-editor>
+              <div
+                class="editor-content"
+                contenteditable="plaintext-only"
+                role="textbox"
+                spellcheck="false"
+                aria-label="File contents"
+                data-editor
+              ></div>
+            </div>
+          </div>
+
+          <section
+            class="viewer-pane terminal-viewer terminal-screen"
+            role="textbox"
+            tabindex="0"
+            aria-label="Terminal session"
+            aria-multiline="true"
+            data-viewer-panel="terminal"
+            data-terminal-screen
+          ></section>
+        </section>
+      </main>
+    </div>
+
+    <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
