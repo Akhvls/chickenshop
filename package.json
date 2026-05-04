@@ -2,15 +2,21 @@
   "name": "chickenshop",
   "version": "0.1.0",
   "description": "A Codex-inspired Electron IDE shell.",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "private": true,
   "scripts": {
+    "build": "tsc && node scripts/copy-renderer-assets.js",
+    "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/fix-node-pty-permissions.js",
+    "prestart": "npm run build",
     "start": "electron .",
+    "predev": "npm run build",
     "dev": "electron ."
   },
   "devDependencies": {
-    "electron": "41.3.0"
+    "@types/node": "^25.6.0",
+    "electron": "41.3.0",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

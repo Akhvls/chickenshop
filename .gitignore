@@ -1,4 +1,5 @@
 node_modules/
+HOW_IT_WORKS.md
 dist/
 out/
 *.log

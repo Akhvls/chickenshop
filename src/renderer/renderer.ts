@@ -1,14 +1,103 @@
+type ProjectDirectoryNode = import("../shared").ProjectDirectoryNode;
+type ProjectFileNode = import("../shared").ProjectFileNode;
+type ProjectNode = import("../shared").ProjectNode;
+type NewideProjectApi = import("../shared").NewideProjectApi;
+type NewideTerminalApi = import("../shared").NewideTerminalApi;
+type NewideWindowApi = import("../shared").NewideWindowApi;
+type TerminalSession = import("../shared").TerminalSession;
+type WindowState = import("../shared").WindowState;
+type XtermConstructor = typeof import("@xterm/xterm").Terminal;
+type XtermTerminal = import("@xterm/xterm").Terminal;
+type XtermDisposable = import("@xterm/xterm").IDisposable;
+type FitAddonConstructor = typeof import("@xterm/addon-fit").FitAddon;
+type FitAddon = import("@xterm/addon-fit").FitAddon;
+
+interface Window {
+  FitAddon?: {
+    FitAddon: FitAddonConstructor;
+  };
+  Terminal?: XtermConstructor;
+  newideProject?: NewideProjectApi;
+  newideTerminal?: NewideTerminalApi;
+  newideWindow?: NewideWindowApi;
+}
+
+type ViewerType = "text";
+type TabType = "file" | "terminal";
+type TerminalRenameTarget = "sidebar" | "tab";
+type WindowAction = "minimize" | "maximize" | "close";
+
+interface EditableFile {
+  name: string;
+  path: string;
+  viewer: ViewerType;
+  status: string;
+  content: string;
+  readonly?: boolean;
+}
+
+interface OpenTab {
+  type: TabType;
+  id: string;
+}
+
+interface TabDetails {
+  name: string;
+  title: string;
+  closeLabel: string;
+}
+
+interface Viewer {
+  read(file?: EditableFile): void;
+  render(file: EditableFile): void;
+  clear(): void;
+}
+
+interface TerminalFrontend {
+  xterm: XtermTerminal;
+  fitAddon: FitAddon;
+  host: HTMLDivElement;
+  disposables: XtermDisposable[];
+  opened: boolean;
+  lastCols: number;
+  lastRows: number;
+}
+
+interface RendererTerminal extends TerminalSession, TerminalFrontend {
+  baseName: string;
+  exited: boolean;
+}
+
+function requireElement<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`Required DOM element was not found: ${selector}`);
+  }
+  return element;
+}
+
+function closestElement<T extends Element>(
+  target: EventTarget | null,
+  selector: string
+): T | null {
+  return target instanceof Element ? target.closest<T>(selector) : null;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const iconBase = "./assets/icons";
 const fileTypeIconBase = "./assets/file-types";
 
-const fileTypeIcons = {
+const fileTypeIcons: Record<string, string> = {
   md: "md",
   markdown: "md",
   txt: "txt",
   text: "txt"
 };
 
-const fallbackProject = {
+const fallbackProject: ProjectDirectoryNode = {
   type: "directory",
   name: "newide",
   path: "demo:/newide",
@@ -25,7 +114,7 @@ Electron is installed locally and the dev command runs the desktop app directly.
 npm run dev
 
 The renderer is loaded from:
-src/renderer/index.html
+dist/renderer/index.html
 
 This surface should behave like a quiet text editor: open a file, read it, edit it, and keep the surrounding chrome out of the way.`
     },
@@ -57,48 +146,58 @@ This surface should behave like a quiet text editor: open a file, read it, edit 
   ]
 };
 
-let activeProject;
-let files = {};
-let terminals = {};
-let activeFileId;
-let activeTerminalId;
-let openTabs = [];
-let expandedFolders = new Set();
+let activeProject: ProjectDirectoryNode | undefined;
+let files: Record<string, EditableFile> = {};
+let terminals: Record<string, RendererTerminal> = {};
+let activeFileId: string | undefined;
+let activeTerminalId: string | undefined;
+let openTabs: OpenTab[] = [];
+let expandedFolders = new Set<string>();
 let isLoadingFile = false;
-let editingTerminalId;
-let editingTerminalRenameTarget;
-let lastTerminalRowClickId;
+let editingTerminalId: string | undefined;
+let editingTerminalRenameTarget: TerminalRenameTarget | undefined;
+let lastTerminalRowClickId: string | undefined;
 let lastTerminalRowClickAt = 0;
 
-const tabsRoot = document.querySelector("[data-open-tabs]");
-const homePane = document.querySelector("[data-home-pane]");
-const textEditor = document.querySelector("[data-text-editor]");
-const editor = document.querySelector("[data-editor]");
-const terminalListRoot = document.querySelector("[data-terminal-list]");
-const terminalScreen = document.querySelector("[data-terminal-screen]");
-const projectTreeRoot = document.querySelector("[data-project-tree]");
-const viewerPanels = document.querySelectorAll("[data-viewer-panel]");
+const tabsRoot = requireElement<HTMLDivElement>("[data-open-tabs]");
+const homePane = requireElement<HTMLElement>("[data-home-pane]");
+const textEditor = requireElement<HTMLElement>("[data-text-editor]");
+const editor = requireElement<HTMLElement>("[data-editor]");
+const terminalListRoot = requireElement<HTMLElement>("[data-terminal-list]");
+const terminalScreen = requireElement<HTMLElement>("[data-terminal-screen]");
+const projectTreeRoot = requireElement<HTMLElement>("[data-project-tree]");
+const viewerPanels = document.querySelectorAll<HTMLElement>("[data-viewer-panel]");
 const XtermTerminal = window.Terminal;
 const XtermFitAddon = window.FitAddon?.FitAddon;
 
 let terminalCreationReady = false;
-const pendingTerminalData = {};
+const pendingTerminalData: Record<string, string> = {};
 
 setTimeout(() => {
   terminalCreationReady = true;
 }, 600);
 
-const windowControls = {
-  minimize: () => window.newideWindow?.minimize(),
-  maximize: () => window.newideWindow?.toggleMaximize(),
-  close: () => window.newideWindow?.close()
+const windowControls: Record<WindowAction, () => void> = {
+  minimize: () => {
+    void window.newideWindow?.minimize();
+  },
+  maximize: () => {
+    void window.newideWindow?.toggleMaximize();
+  },
+  close: () => {
+    void window.newideWindow?.close();
+  }
 };
 
-const viewers = {
+function isWindowAction(action: string | null): action is WindowAction {
+  return action === "minimize" || action === "maximize" || action === "close";
+}
+
+const viewers: Record<ViewerType, Viewer> = {
   text: {
     read(file) {
       if (!file || file.readonly) return;
-      file.content = editor.textContent;
+      file.content = editor.textContent ?? "";
     },
     render(file) {
       editor.textContent = file.content ?? "";
@@ -113,11 +212,11 @@ const viewers = {
   }
 };
 
-function getViewer(file) {
-  return viewers[file?.viewer] ?? viewers.text;
+function getViewer(file?: EditableFile): Viewer {
+  return file ? viewers[file.viewer] : viewers.text;
 }
 
-function icon(name, className = "ui-icon") {
+function icon(name: string, className = "ui-icon"): HTMLImageElement {
   const image = document.createElement("img");
   image.className = className;
   image.src = `${iconBase}/${name}.png`;
@@ -126,16 +225,16 @@ function icon(name, className = "ui-icon") {
   return image;
 }
 
-function getFileExtension(fileName = "") {
+function getFileExtension(fileName = ""): string {
   const extension = fileName.split(".").pop()?.toLowerCase();
-  return extension === fileName ? "" : extension;
+  return !extension || extension === fileName ? "" : extension;
 }
 
-function getFileTypeIconName(fileName) {
+function getFileTypeIconName(fileName: string): string | undefined {
   return fileTypeIcons[getFileExtension(fileName)];
 }
 
-function fileTypeIcon(fileName, className = "tab-file-icon") {
+function fileTypeIcon(fileName: string, className = "tab-file-icon"): HTMLImageElement {
   const image = document.createElement("img");
   const iconName = getFileTypeIconName(fileName);
   image.className = className;
@@ -147,7 +246,7 @@ function fileTypeIcon(fileName, className = "tab-file-icon") {
   return image;
 }
 
-function svgIcon(className, paths) {
+function svgIcon(className: string, paths: string[]): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.classList.add("ui-icon", className);
   svg.setAttribute("viewBox", "0 0 18 18");
@@ -162,7 +261,7 @@ function svgIcon(className, paths) {
   return svg;
 }
 
-function terminalIcon(className = "terminal-icon") {
+function terminalIcon(className = "terminal-icon"): SVGSVGElement {
   return svgIcon(className, [
     "M3.25 4.25h11.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H3.25a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z",
     "m4.75 7.15 1.85 1.6-1.85 1.6",
@@ -170,28 +269,28 @@ function terminalIcon(className = "terminal-icon") {
   ]);
 }
 
-function showViewer(viewerType) {
-  homePane?.classList.remove("active");
+function showViewer(viewerType: ViewerType | "terminal"): void {
+  homePane.classList.remove("active");
   viewerPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.viewerPanel === viewerType);
   });
 }
 
-function showHome() {
+function showHome(): void {
   viewerPanels.forEach((panel) => {
     panel.classList.remove("active");
   });
-  homePane?.classList.add("active");
+  homePane.classList.add("active");
 }
 
-function saveActiveFile() {
+function saveActiveFile(): void {
   if (!activeFileId) return;
   const file = files[activeFileId];
   getViewer(file).read(file);
 }
 
-function updateLineNumbers() {
-  const lineCount = Math.max(editor.textContent.split("\n").length, 1);
+function updateLineNumbers(): void {
+  const lineCount = Math.max((editor.textContent ?? "").split("\n").length, 1);
   textEditor
     .querySelectorAll("[data-line-number]")
     .forEach((lineNumber) => lineNumber.remove());
@@ -202,7 +301,7 @@ function updateLineNumbers() {
     lineNumber.className = "editor-line-number";
     lineNumber.dataset.lineNumber = "";
     lineNumber.setAttribute("aria-hidden", "true");
-    lineNumber.style.setProperty("--line-index", index);
+    lineNumber.style.setProperty("--line-index", String(index));
     lineNumber.textContent = String(index + 1);
     lineFragment.append(lineNumber);
   });
@@ -210,23 +309,23 @@ function updateLineNumbers() {
   textEditor.insertBefore(lineFragment, editor);
 }
 
-function getTabKey(type, id) {
+function getTabKey(type: TabType, id: string): string {
   return `${type}:${id}`;
 }
 
-function getActiveTabKey() {
+function getActiveTabKey(): string | undefined {
   if (activeTerminalId) return getTabKey("terminal", activeTerminalId);
   if (activeFileId) return getTabKey("file", activeFileId);
   return undefined;
 }
 
-function ensureOpenTab(type, id) {
+function ensureOpenTab(type: TabType, id: string): void {
   const key = getTabKey(type, id);
   if (openTabs.some((tab) => getTabKey(tab.type, tab.id) === key)) return;
   openTabs.push({ type, id });
 }
 
-function getTabDetails(tab) {
+function getTabDetails(tab: OpenTab): TabDetails | undefined {
   if (tab.type === "file") {
     const file = files[tab.id];
     if (!file) return undefined;
@@ -246,7 +345,11 @@ function getTabDetails(tab) {
   };
 }
 
-function renderTerminalRenameInput(terminal, target, className) {
+function renderTerminalRenameInput(
+  terminal: RendererTerminal,
+  target: TerminalRenameTarget,
+  className: string
+): HTMLInputElement {
   const input = document.createElement("input");
   input.className = className;
   input.value = terminal.name;
@@ -283,9 +386,12 @@ function renderTerminalRenameInput(terminal, target, className) {
   return input;
 }
 
-function focusTerminalRenameInput(terminalId, target) {
+function focusTerminalRenameInput(
+  terminalId: string,
+  target: TerminalRenameTarget
+): void {
   const renameKey = `${target}:${terminalId}`;
-  const input = [...document.querySelectorAll("[data-terminal-rename]")].find(
+  const input = [...document.querySelectorAll<HTMLInputElement>("[data-terminal-rename]")].find(
     (candidate) => candidate.dataset.terminalRename === renameKey
   );
 
@@ -294,7 +400,7 @@ function focusTerminalRenameInput(terminalId, target) {
   input.select();
 }
 
-function beginTerminalRename(terminalId, target) {
+function beginTerminalRename(terminalId: string, target: TerminalRenameTarget): void {
   if (!terminals[terminalId]) return;
 
   lastTerminalRowClickId = undefined;
@@ -309,7 +415,7 @@ function beginTerminalRename(terminalId, target) {
   });
 }
 
-function commitTerminalRename(terminalId, name) {
+function commitTerminalRename(terminalId: string, name: string): void {
   const terminal = terminals[terminalId];
   const nextName = name.trim();
 
@@ -324,14 +430,14 @@ function commitTerminalRename(terminalId, name) {
   renderTerminals();
 }
 
-function cancelTerminalRename() {
+function cancelTerminalRename(): void {
   editingTerminalId = undefined;
   editingTerminalRenameTarget = undefined;
   renderOpenTabs();
   renderTerminals();
 }
 
-function activateOpenTab(tab) {
+function activateOpenTab(tab?: OpenTab): void {
   if (!tab) {
     activeFileId = undefined;
     activeTerminalId = undefined;
@@ -351,11 +457,11 @@ function activateOpenTab(tab) {
   setActiveFile(tab.id, { force: true });
 }
 
-function renderOpenTabs() {
+function renderOpenTabs(): void {
   const activeKey = getActiveTabKey();
 
   tabsRoot.replaceChildren(
-    ...openTabs.flatMap((openTab) => {
+    ...openTabs.flatMap((openTab): HTMLDivElement[] => {
       const details = getTabDetails(openTab);
       if (!details) return [];
 
@@ -412,15 +518,15 @@ function renderOpenTabs() {
   );
 }
 
-function renderSidebarStates() {
-  document.querySelectorAll("[data-file-path]").forEach((button) => {
+function renderSidebarStates(): void {
+  document.querySelectorAll<HTMLElement>("[data-file-path]").forEach((button) => {
     const isActive = button.dataset.filePath === activeFileId;
     button.classList.toggle("selected", isActive);
     button.classList.toggle("is-active", isActive);
   });
 }
 
-function renderTerminals() {
+function renderTerminals(): void {
   terminalListRoot.replaceChildren(
     ...Object.values(terminals).map((terminal) => {
       const row = document.createElement("div");
@@ -462,18 +568,18 @@ function renderTerminals() {
   );
 }
 
-function setSidebarCollapsed(collapsed) {
+function setSidebarCollapsed(collapsed: boolean): void {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
-  document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
+  document.querySelectorAll<HTMLElement>("[data-sidebar-toggle]").forEach((button) => {
     button.setAttribute("aria-expanded", String(!collapsed));
   });
 }
 
-function toggleSidebar() {
+function toggleSidebar(): void {
   setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
 }
 
-function toggleFolder(folderPath) {
+function toggleFolder(folderPath: string): void {
   if (expandedFolders.has(folderPath)) {
     expandedFolders.delete(folderPath);
   } else {
@@ -482,40 +588,49 @@ function toggleFolder(folderPath) {
   renderProjectTree();
 }
 
-function isTextCandidate(fileName) {
+function isTextCandidate(fileName: string): boolean {
   return /\.(css|html|js|json|md|mjs|cjs|txt|ts|tsx|jsx|yml|yaml)$/i.test(fileName);
 }
 
-function findNode(node, predicate) {
+function findFileNode(
+  node: ProjectNode | undefined,
+  predicate: (node: ProjectFileNode) => boolean
+): ProjectFileNode | undefined {
   if (!node) return undefined;
-  if (predicate(node)) return node;
+  if (node.type === "file") return predicate(node) ? node : undefined;
 
-  for (const child of node.children ?? []) {
-    const match = findNode(child, predicate);
+  for (const child of node.children) {
+    const match = findFileNode(child, predicate);
     if (match) return match;
   }
 
   return undefined;
 }
 
-function findPreferredFile(project) {
+function findPreferredFile(project: ProjectDirectoryNode): ProjectFileNode | undefined {
   return (
-    findNode(
+    findFileNode(
       project,
-      (node) => node.type === "file" && node.path.endsWith("src/renderer/index.html")
+      (node) => node.path.endsWith("src/renderer/index.html")
     ) ??
-    findNode(project, (node) => node.type === "file" && isTextCandidate(node.name))
+    findFileNode(project, (node) => isTextCandidate(node.name))
   );
 }
 
-function expandParentsForPath(targetPath, node = activeProject, parents = []) {
+function expandParentsForPath(
+  targetPath: string,
+  node: ProjectNode | undefined = activeProject,
+  parents: string[] = []
+): boolean {
   if (!node) return false;
   if (node.path === targetPath) {
     parents.forEach((folderPath) => expandedFolders.add(folderPath));
     return true;
   }
 
-  for (const child of node.children ?? []) {
+  if (node.type !== "directory") return false;
+
+  for (const child of node.children) {
     if (expandParentsForPath(targetPath, child, [...parents, node.path])) {
       return true;
     }
@@ -524,7 +639,7 @@ function expandParentsForPath(targetPath, node = activeProject, parents = []) {
   return false;
 }
 
-function registerFallbackFiles(node) {
+function registerFallbackFiles(node: ProjectNode | undefined): void {
   if (!node) return;
   if (node.type === "file") {
     files[node.path] = {
@@ -537,10 +652,10 @@ function registerFallbackFiles(node) {
     return;
   }
 
-  node.children?.forEach(registerFallbackFiles);
+  node.children.forEach(registerFallbackFiles);
 }
 
-function renderProjectTree() {
+function renderProjectTree(): void {
   projectTreeRoot.replaceChildren();
 
   if (!activeProject) return;
@@ -553,7 +668,7 @@ function renderProjectTree() {
   rootButton.className = "tree-item folder-row project-main";
   rootButton.type = "button";
   rootButton.dataset.folderPath = activeProject.path;
-  rootButton.style.setProperty("--tree-depth", 0);
+  rootButton.style.setProperty("--tree-depth", "0");
   rootButton.setAttribute("aria-expanded", String(isRootExpanded));
   rootButton.append(icon(isRootExpanded ? "chevron-down" : "chevron-right", "ui-icon tree-chevron"));
   rootButton.append(icon("folder", "ui-icon tree-icon"));
@@ -564,12 +679,12 @@ function renderProjectTree() {
   rootRow.append(rootButton);
   projectTreeRoot.append(rootRow);
 
-  const children = renderTreeChildren(activeProject.children ?? [], 1);
+  const children = renderTreeChildren(activeProject.children, 1);
   children.hidden = !expandedFolders.has(activeProject.path);
   projectTreeRoot.append(children);
 }
 
-function renderTreeChildren(nodes, depth) {
+function renderTreeChildren(nodes: ProjectNode[], depth: number): HTMLDivElement {
   const list = document.createElement("div");
   list.className = "file-list tree-children";
 
@@ -580,7 +695,7 @@ function renderTreeChildren(nodes, depth) {
       row.className = "tree-item folder-row";
       row.type = "button";
       row.dataset.folderPath = node.path;
-      row.style.setProperty("--tree-depth", depth);
+      row.style.setProperty("--tree-depth", String(depth));
       row.setAttribute("aria-expanded", String(isExpanded));
       row.append(icon(isExpanded ? "chevron-down" : "chevron-right", "ui-icon tree-chevron"));
       row.append(icon("folder", "ui-icon tree-icon"));
@@ -590,7 +705,7 @@ function renderTreeChildren(nodes, depth) {
       row.append(label);
       list.append(row);
 
-      const childList = renderTreeChildren(node.children ?? [], depth + 1);
+      const childList = renderTreeChildren(node.children, depth + 1);
       childList.hidden = !isExpanded;
       list.append(childList);
       return;
@@ -600,7 +715,7 @@ function renderTreeChildren(nodes, depth) {
     row.className = "tree-item file-row";
     row.type = "button";
     row.dataset.filePath = node.path;
-    row.style.setProperty("--tree-depth", depth);
+    row.style.setProperty("--tree-depth", String(depth));
 
     const spacer = document.createElement("span");
     spacer.className = "tree-chevron tree-chevron-spacer";
@@ -626,7 +741,7 @@ function renderTreeChildren(nodes, depth) {
   return list;
 }
 
-function appendTerminalOutput(terminalId, text) {
+function appendTerminalOutput(terminalId: string, text: string): void {
   const terminal = terminals[terminalId];
   if (!terminal) {
     pendingTerminalData[terminalId] = `${pendingTerminalData[terminalId] ?? ""}${text}`;
@@ -636,12 +751,12 @@ function appendTerminalOutput(terminalId, text) {
   terminal.xterm.write(text);
 }
 
-function disposeTerminalFrontend(terminal) {
+function disposeTerminalFrontend(terminal?: RendererTerminal): void {
   terminal?.disposables?.forEach((disposable) => disposable.dispose());
   terminal?.xterm?.dispose();
 }
 
-function createTerminalFrontend(terminalId) {
+function createTerminalFrontend(terminalId: string): TerminalFrontend {
   if (!XtermTerminal || !XtermFitAddon) {
     throw new Error("xterm failed to load.");
   }
@@ -688,11 +803,11 @@ function createTerminalFrontend(terminalId) {
     xterm.onData((data) => {
       if (!window.newideTerminal?.write) return;
       window.newideTerminal.write(terminalId, data).catch((error) => {
-        xterm.write(`\r\nCould not write to terminal: ${error.message}\r\n`);
+        xterm.write(`\r\nCould not write to terminal: ${getErrorMessage(error)}\r\n`);
       });
     }),
     xterm.onResize(({ cols, rows }) => {
-      window.newideTerminal?.resize?.(terminalId, cols, rows);
+      void window.newideTerminal?.resize(terminalId, cols, rows);
     })
   ];
 
@@ -707,7 +822,7 @@ function createTerminalFrontend(terminalId) {
   };
 }
 
-function fitTerminal(terminal) {
+function fitTerminal(terminal?: RendererTerminal): void {
   if (!terminal?.opened) return;
 
   terminal.fitAddon.fit();
@@ -715,12 +830,12 @@ function fitTerminal(terminal) {
   if (terminal.xterm.cols !== terminal.lastCols || terminal.xterm.rows !== terminal.lastRows) {
     terminal.lastCols = terminal.xterm.cols;
     terminal.lastRows = terminal.xterm.rows;
-    window.newideTerminal?.resize?.(terminal.id, terminal.xterm.cols, terminal.xterm.rows);
+    void window.newideTerminal?.resize(terminal.id, terminal.xterm.cols, terminal.xterm.rows);
   }
 }
 
-function renderTerminalView() {
-  const terminal = terminals[activeTerminalId];
+function renderTerminalView(): void {
+  const terminal = activeTerminalId ? terminals[activeTerminalId] : undefined;
   if (!terminal) {
     terminalScreen.replaceChildren();
     return;
@@ -741,7 +856,8 @@ function renderTerminalView() {
   });
 }
 
-function setActiveTerminal(terminalId) {
+function setActiveTerminal(terminalId: string | undefined): void {
+  if (!terminalId) return;
   const terminal = terminals[terminalId];
   if (!terminal) return;
 
@@ -761,22 +877,22 @@ function setActiveTerminal(terminalId) {
   });
 }
 
-async function createTerminalSession() {
-  let terminal;
+async function createTerminalSession(): Promise<void> {
+  let terminal: TerminalSession;
   let startupOutput = "";
   let terminalExited = false;
 
   if (window.newideTerminal?.create) {
     try {
       terminal = await window.newideTerminal.create();
-    } catch (error) {
+    } catch (error: unknown) {
       const id = `terminal-${Date.now()}`;
       terminal = {
         id,
         name: "terminal",
-        cwd: "Unavailable",
+        cwd: "Unavailable"
       };
-      startupOutput = `Terminal failed to start: ${error.message}\r\n`;
+      startupOutput = `Terminal failed to start: ${getErrorMessage(error)}\r\n`;
       terminalExited = true;
     }
   } else {
@@ -784,7 +900,7 @@ async function createTerminalSession() {
     terminal = {
       id,
       name: "terminal",
-      cwd: "Preview",
+      cwd: "Preview"
     };
     startupOutput = "Terminal execution is only available in the Electron desktop app.\r\n";
     terminalExited = true;
@@ -816,7 +932,7 @@ async function createTerminalSession() {
   }
 }
 
-function setActiveFile(fileId, { force = false } = {}) {
+function setActiveFile(fileId: string, { force = false }: { force?: boolean } = {}): void {
   const file = files[fileId];
   if (!file) return;
   ensureOpenTab("file", fileId);
@@ -842,7 +958,7 @@ function setActiveFile(fileId, { force = false } = {}) {
   });
 }
 
-async function openProjectFile(filePath) {
+async function openProjectFile(filePath: string | undefined): Promise<void> {
   if (!filePath) return;
 
   if (!files[filePath]) {
@@ -858,13 +974,13 @@ async function openProjectFile(filePath) {
         content: projectFile.content,
         readonly: projectFile.readonly
       };
-    } catch (error) {
+    } catch (error: unknown) {
       files[filePath] = {
         name: filePath.split(/[\\/]/).at(-1) || "File",
         path: filePath,
         viewer: "text",
         status: "Error",
-        content: `Could not open this file.\n\n${error.message}`,
+        content: `Could not open this file.\n\n${getErrorMessage(error)}`,
         readonly: true
       };
     }
@@ -875,7 +991,7 @@ async function openProjectFile(filePath) {
   setActiveFile(filePath);
 }
 
-function closeFileTab(fileId) {
+function closeFileTab(fileId: string): void {
   const wasActive = fileId === activeFileId;
   const tabIndex = openTabs.findIndex(
     (tab) => tab.type === "file" && tab.id === fileId
@@ -897,7 +1013,8 @@ function closeFileTab(fileId) {
   renderSidebarStates();
 }
 
-function closeTerminalTab(terminalId) {
+function closeTerminalTab(terminalId: string | undefined): void {
+  if (!terminalId) return;
   const wasActive = terminalId === activeTerminalId;
   const tabIndex = openTabs.findIndex(
     (tab) => tab.type === "terminal" && tab.id === terminalId
@@ -912,7 +1029,7 @@ function closeTerminalTab(terminalId) {
     editingTerminalRenameTarget = undefined;
   }
 
-  window.newideTerminal?.dispose?.(terminalId);
+  void window.newideTerminal?.dispose(terminalId);
   disposeTerminalFrontend(terminals[terminalId]);
   delete terminals[terminalId];
 
@@ -926,14 +1043,17 @@ function closeTerminalTab(terminalId) {
   renderTerminals();
 }
 
-async function loadProject(project, { openPreferred = false } = {}) {
+async function loadProject(
+  project: ProjectDirectoryNode | null | undefined,
+  { openPreferred = false }: { openPreferred?: boolean } = {}
+): Promise<void> {
   if (!project) return;
 
   saveActiveFile();
   activeProject = project;
   files = {};
   Object.keys(terminals).forEach((terminalId) => {
-    window.newideTerminal?.dispose?.(terminalId);
+    void window.newideTerminal?.dispose(terminalId);
     disposeTerminalFrontend(terminals[terminalId]);
   });
   terminals = {};
@@ -960,30 +1080,32 @@ async function loadProject(project, { openPreferred = false } = {}) {
   }
 }
 
-async function openProjectPicker() {
+async function openProjectPicker(): Promise<void> {
   if (!window.newideProject?.openFolder) return;
   const project = await window.newideProject.openFolder();
   if (project) await loadProject(project);
 }
 
-document.querySelectorAll("[data-window-action]").forEach((button) => {
+document.querySelectorAll<HTMLElement>("[data-window-action]").forEach((button) => {
   button.addEventListener("click", () => {
     const action = button.getAttribute("data-window-action");
-    windowControls[action]?.();
+    if (isWindowAction(action)) windowControls[action]();
   });
 });
 
-document.querySelectorAll("[data-sidebar-toggle]").forEach((button) => {
+document.querySelectorAll<HTMLElement>("[data-sidebar-toggle]").forEach((button) => {
   button.addEventListener("click", toggleSidebar);
 });
 
-document.querySelector("[data-open-project]")?.addEventListener("click", openProjectPicker);
+document.querySelector<HTMLElement>("[data-open-project]")?.addEventListener("click", () => {
+  void openProjectPicker();
+});
 
-const terminalAddButton = document.querySelector(".terminal-add");
+const terminalAddButton = document.querySelector<HTMLElement>(".terminal-add");
 
-function requestTerminalCreation() {
+function requestTerminalCreation(): void {
   if (!terminalCreationReady) return;
-  createTerminalSession();
+  void createTerminalSession();
 }
 
 terminalAddButton?.addEventListener("click", (event) => {
@@ -999,7 +1121,7 @@ terminalAddButton?.addEventListener("keydown", (event) => {
 });
 
 terminalListRoot.addEventListener("click", (event) => {
-  const closeButton = event.target.closest("[data-terminal-close]");
+  const closeButton = closestElement<HTMLElement>(event.target, "[data-terminal-close]");
   if (closeButton) {
     event.preventDefault();
     lastTerminalRowClickId = undefined;
@@ -1008,12 +1130,13 @@ terminalListRoot.addEventListener("click", (event) => {
     return;
   }
 
-  if (event.target.closest("[data-terminal-rename]")) return;
+  if (closestElement<HTMLElement>(event.target, "[data-terminal-rename]")) return;
 
-  const terminalButton = event.target.closest("[data-terminal-id]");
+  const terminalButton = closestElement<HTMLElement>(event.target, "[data-terminal-id]");
   if (!terminalButton) return;
 
   const terminalId = terminalButton.dataset.terminalId;
+  if (!terminalId) return;
   const now = Date.now();
   const isRenameClick =
     lastTerminalRowClickId === terminalId && now - lastTerminalRowClickAt < 450;
@@ -1032,13 +1155,13 @@ terminalListRoot.addEventListener("click", (event) => {
 
 terminalListRoot.addEventListener("keydown", (event) => {
   if (
-    event.target.closest("[data-terminal-close]") ||
-    event.target.closest("[data-terminal-rename]")
+    closestElement<HTMLElement>(event.target, "[data-terminal-close]") ||
+    closestElement<HTMLElement>(event.target, "[data-terminal-rename]")
   ) {
     return;
   }
 
-  const terminalButton = event.target.closest("[data-terminal-id]");
+  const terminalButton = closestElement<HTMLElement>(event.target, "[data-terminal-id]");
   if (!terminalButton) return;
 
   const isActivationKey = event.key === "Enter" || event.key === " ";
@@ -1049,36 +1172,36 @@ terminalListRoot.addEventListener("keydown", (event) => {
 });
 
 projectTreeRoot.addEventListener("click", (event) => {
-  const fileButton = event.target.closest("[data-file-path]");
+  const fileButton = closestElement<HTMLElement>(event.target, "[data-file-path]");
   if (fileButton) {
-    openProjectFile(fileButton.dataset.filePath);
+    void openProjectFile(fileButton.dataset.filePath);
     return;
   }
 
-  const folderButton = event.target.closest("[data-folder-path]");
-  if (folderButton) {
+  const folderButton = closestElement<HTMLElement>(event.target, "[data-folder-path]");
+  if (folderButton?.dataset.folderPath) {
     toggleFolder(folderButton.dataset.folderPath);
   }
 });
 
 terminalScreen.addEventListener("click", () => {
-  terminals[activeTerminalId]?.xterm.focus();
+  if (activeTerminalId) terminals[activeTerminalId]?.xterm.focus();
 });
 
 window.addEventListener("resize", () => {
-  fitTerminal(terminals[activeTerminalId]);
+  fitTerminal(activeTerminalId ? terminals[activeTerminalId] : undefined);
 });
 
 if ("ResizeObserver" in window) {
   new ResizeObserver(() => {
-    fitTerminal(terminals[activeTerminalId]);
+    fitTerminal(activeTerminalId ? terminals[activeTerminalId] : undefined);
   }).observe(terminalScreen);
 }
 
-document.querySelectorAll(".primary-nav .nav-item").forEach((button) => {
+document.querySelectorAll<HTMLElement>(".primary-nav .nav-item").forEach((button) => {
   button.addEventListener("click", () => {
     document
-      .querySelectorAll(".primary-nav .nav-item")
+      .querySelectorAll<HTMLElement>(".primary-nav .nav-item")
       .forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
   });
@@ -1104,19 +1227,19 @@ document.addEventListener("keydown", (event) => {
   toggleSidebar();
 });
 
-function applyWindowState({ expanded }) {
+function applyWindowState({ expanded }: WindowState): void {
   document.body.classList.toggle("window-expanded", expanded);
 }
 
-window.newideWindow?.getState?.().then(applyWindowState);
+void window.newideWindow?.getState().then(applyWindowState);
 window.newideWindow?.onStateChange(applyWindowState);
-window.newideWindow?.onToggleSidebar?.(toggleSidebar);
+window.newideWindow?.onToggleSidebar(toggleSidebar);
 
-window.newideTerminal?.onData?.(({ id, data }) => {
+window.newideTerminal?.onData(({ id, data }) => {
   appendTerminalOutput(id, data);
 });
 
-window.newideTerminal?.onExit?.(({ id, code }) => {
+window.newideTerminal?.onExit(({ id, code }) => {
   const terminal = terminals[id];
   if (!terminal) return;
 
@@ -1125,7 +1248,7 @@ window.newideTerminal?.onExit?.(({ id, code }) => {
   renderTerminals();
 });
 
-async function initializeEditor() {
+async function initializeEditor(): Promise<void> {
   if (window.newideProject?.getDefault) {
     try {
       await loadProject(await window.newideProject.getDefault());
@@ -1140,7 +1263,9 @@ async function initializeEditor() {
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initializeEditor, { once: true });
+  document.addEventListener("DOMContentLoaded", () => {
+    void initializeEditor();
+  }, { once: true });
 } else {
-  initializeEditor();
+  void initializeEditor();
 }

@@ -1,19 +1,46 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
-const fs = require("fs/promises");
-const path = require("path");
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import type { Dirent } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { IPty } from "node-pty";
+import type {
+  ProjectDirectoryNode,
+  ProjectFileContents,
+  ProjectNode,
+  TerminalDataPayload,
+  TerminalExitPayload,
+  TerminalResizeRequest,
+  TerminalSession,
+  TerminalSize,
+  TerminalWriteRequest
+} from "./shared";
 
-let mainWindow;
-let terminalCounter = 0;
-let pty;
-let ptyLoadError;
-
-try {
-  pty = require("node-pty");
-} catch (error) {
-  ptyLoadError = error;
+interface ScanCounter {
+  count: number;
 }
 
-const terminalProcesses = new Map();
+interface ScanOptions {
+  depth?: number;
+  counter: ScanCounter;
+}
+
+interface BackendTerminal {
+  id: string;
+  process: IPty;
+}
+
+let mainWindow: BrowserWindow | undefined;
+let terminalCounter = 0;
+let pty: typeof import("node-pty") | undefined;
+let ptyLoadError: Error | undefined;
+
+try {
+  pty = require("node-pty") as typeof import("node-pty");
+} catch (error: unknown) {
+  ptyLoadError = error instanceof Error ? error : new Error(String(error));
+}
+
+const terminalProcesses = new Map<string, BackendTerminal>();
 
 const ignoredDirectories = new Set([
   ".git",
@@ -27,15 +54,18 @@ const ignoredDirectories = new Set([
 
 const ignoredFiles = new Set([".DS_Store"]);
 
-function shouldIgnoreEntry(name, isDirectory) {
+function shouldIgnoreEntry(name: string, isDirectory: boolean): boolean {
   if (isDirectory) return ignoredDirectories.has(name);
   return ignoredFiles.has(name);
 }
 
-async function scanDirectory(directoryPath, { depth = 0, counter }) {
+async function scanDirectory(
+  directoryPath: string,
+  { depth = 0, counter }: ScanOptions
+): Promise<ProjectNode[]> {
   if (depth > 10 || counter.count > 1200) return [];
 
-  let entries;
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(directoryPath, { withFileTypes: true });
   } catch {
@@ -51,7 +81,7 @@ async function scanDirectory(directoryPath, { depth = 0, counter }) {
       return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
 
-  const children = [];
+  const children: ProjectNode[] = [];
 
   for (const entry of entries) {
     if (counter.count > 1200) break;
@@ -86,7 +116,7 @@ async function scanDirectory(directoryPath, { depth = 0, counter }) {
   return children;
 }
 
-async function buildProject(directoryPath) {
+async function buildProject(directoryPath: string): Promise<ProjectDirectoryNode> {
   const rootPath = path.resolve(directoryPath);
   return {
     type: "directory",
@@ -98,7 +128,7 @@ async function buildProject(directoryPath) {
   };
 }
 
-async function readProjectFile(filePath) {
+async function readProjectFile(filePath: string): Promise<ProjectFileContents> {
   const resolvedPath = path.resolve(filePath);
   const stat = await fs.stat(resolvedPath);
 
@@ -128,16 +158,19 @@ async function readProjectFile(filePath) {
   };
 }
 
-function getDefaultProjectPath() {
+function getDefaultProjectPath(): string {
   return path.resolve(__dirname, "..");
 }
 
-function sendTerminalPayload(channel, payload) {
+function sendTerminalPayload(
+  channel: "terminal:data" | "terminal:exit",
+  payload: TerminalDataPayload | TerminalExitPayload
+): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send(channel, payload);
 }
 
-function disposeTerminal(id) {
+function disposeTerminal(id: string): void {
   const terminal = terminalProcesses.get(id);
   if (!terminal) return;
 
@@ -150,13 +183,13 @@ function disposeTerminal(id) {
   }
 }
 
-function disposeAllTerminals() {
+function disposeAllTerminals(): void {
   for (const id of terminalProcesses.keys()) {
     disposeTerminal(id);
   }
 }
 
-function createTerminal({ cols = 120, rows = 30 } = {}) {
+function createTerminal({ cols = 120, rows = 30 }: TerminalSize = {}): TerminalSession {
   if (!pty) {
     throw new Error(
       `Real terminal backend failed to load.${ptyLoadError ? ` ${ptyLoadError.message}` : ""}`
@@ -200,7 +233,7 @@ function createTerminal({ cols = 120, rows = 30 } = {}) {
   };
 }
 
-function publishWindowState() {
+function publishWindowState(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   mainWindow.webContents.send("window:state", {
@@ -208,8 +241,8 @@ function publishWindowState() {
   });
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function createWindow(): void {
+  const window = new BrowserWindow({
     width: 1320,
     height: 860,
     minWidth: 860,
@@ -228,9 +261,11 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow = window;
 
-  mainWindow.webContents.on("before-input-event", (event, input) => {
+  window.loadFile(path.join(__dirname, "renderer", "index.html"));
+
+  window.webContents.on("before-input-event", (event, input) => {
     const isSidebarShortcut =
       (input.meta || input.control) &&
       !input.alt &&
@@ -239,19 +274,19 @@ function createWindow() {
 
     if (!isSidebarShortcut) return;
     event.preventDefault();
-    mainWindow.webContents.send("sidebar:toggle");
+    window.webContents.send("sidebar:toggle");
   });
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
+  window.once("ready-to-show", () => {
+    window.show();
     publishWindowState();
   });
 
-  mainWindow.on("maximize", publishWindowState);
-  mainWindow.on("unmaximize", publishWindowState);
-  mainWindow.on("enter-full-screen", publishWindowState);
-  mainWindow.on("leave-full-screen", publishWindowState);
-  mainWindow.on("restore", publishWindowState);
+  window.on("maximize", publishWindowState);
+  window.on("unmaximize", publishWindowState);
+  window.on("enter-full-screen", publishWindowState);
+  window.on("leave-full-screen", publishWindowState);
+  window.on("restore", publishWindowState);
 }
 
 app.whenReady().then(() => {
@@ -310,25 +345,25 @@ ipcMain.handle("project:open-folder", async () => {
   return buildProject(result.filePaths[0]);
 });
 
-ipcMain.handle("project:read-file", (_event, filePath) => readProjectFile(filePath));
+ipcMain.handle("project:read-file", (_event, filePath: string) => readProjectFile(filePath));
 
-ipcMain.handle("terminal:create", (_event, size) => createTerminal(size));
+ipcMain.handle("terminal:create", (_event, size?: TerminalSize) => createTerminal(size));
 
-ipcMain.handle("terminal:write", (_event, { id, data }) => {
+ipcMain.handle("terminal:write", (_event, { id, data }: TerminalWriteRequest) => {
   const terminal = terminalProcesses.get(id);
   if (!terminal) return false;
   terminal.process.write(data);
   return true;
 });
 
-ipcMain.handle("terminal:resize", (_event, { id, cols, rows }) => {
+ipcMain.handle("terminal:resize", (_event, { id, cols, rows }: TerminalResizeRequest) => {
   const terminal = terminalProcesses.get(id);
   if (!terminal) return false;
   terminal.process.resize(cols, rows);
   return true;
 });
 
-ipcMain.handle("terminal:dispose", (_event, id) => {
+ipcMain.handle("terminal:dispose", (_event, id: string) => {
   disposeTerminal(id);
   return true;
 });
