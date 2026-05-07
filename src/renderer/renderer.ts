@@ -3,8 +3,10 @@ type ProjectFileNode = import("../shared").ProjectFileNode;
 type ProjectNode = import("../shared").ProjectNode;
 type NewideProjectApi = import("../shared").NewideProjectApi;
 type NewideTerminalApi = import("../shared").NewideTerminalApi;
+type NewideUpdateApi = import("../shared").NewideUpdateApi;
 type NewideWindowApi = import("../shared").NewideWindowApi;
 type TerminalSession = import("../shared").TerminalSession;
+type UpdateCheckResult = import("../shared").UpdateCheckResult;
 type WindowState = import("../shared").WindowState;
 type XtermConstructor = typeof import("@xterm/xterm").Terminal;
 type XtermTerminal = import("@xterm/xterm").Terminal;
@@ -19,6 +21,7 @@ interface Window {
   Terminal?: XtermConstructor;
   newideProject?: NewideProjectApi;
   newideTerminal?: NewideTerminalApi;
+  newideUpdate?: NewideUpdateApi;
   newideWindow?: NewideWindowApi;
 }
 
@@ -158,6 +161,7 @@ let editingTerminalId: string | undefined;
 let editingTerminalRenameTarget: TerminalRenameTarget | undefined;
 let lastTerminalRowClickId: string | undefined;
 let lastTerminalRowClickAt = 0;
+let isProjectPickerOpen = false;
 
 const tabsRoot = requireElement<HTMLDivElement>("[data-open-tabs]");
 const homePane = requireElement<HTMLElement>("[data-home-pane]");
@@ -166,12 +170,24 @@ const editor = requireElement<HTMLElement>("[data-editor]");
 const terminalListRoot = requireElement<HTMLElement>("[data-terminal-list]");
 const terminalScreen = requireElement<HTMLElement>("[data-terminal-screen]");
 const projectTreeRoot = requireElement<HTMLElement>("[data-project-tree]");
+const updateBanner = requireElement<HTMLElement>("[data-update-banner]");
+const updateTitle = requireElement<HTMLElement>("[data-update-title]");
+const updateNotes = requireElement<HTMLElement>("[data-update-notes]");
+const updateDismissButton = requireElement<HTMLButtonElement>("[data-update-dismiss]");
+const updateDownloadButton = requireElement<HTMLButtonElement>("[data-update-download]");
+const openProjectButtons = [
+  ...document.querySelectorAll<HTMLButtonElement>("[data-open-project]")
+];
 const viewerPanels = document.querySelectorAll<HTMLElement>("[data-viewer-panel]");
 const XtermTerminal = window.Terminal;
 const XtermFitAddon = window.FitAddon?.FitAddon;
 
 let terminalCreationReady = false;
+let availableUpdateVersion: string | undefined;
+let updateDownloadUrl: string | undefined;
 const pendingTerminalData: Record<string, string> = {};
+const updateCheckIntervalMs = 6 * 60 * 60 * 1000;
+const dismissedUpdateStorageKey = "chickenshop:dismissed-update-version";
 
 setTimeout(() => {
   terminalCreationReady = true;
@@ -505,6 +521,73 @@ function renderSidebarStates(): void {
     button.classList.toggle("selected", isActive);
     button.classList.toggle("is-active", isActive);
   });
+}
+
+function setOpenProjectSelected(selected: boolean): void {
+  openProjectButtons.forEach((button) => {
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+function getDismissedUpdateVersion(): string | undefined {
+  try {
+    return window.localStorage.getItem(dismissedUpdateStorageKey) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function setDismissedUpdateVersion(version: string): void {
+  try {
+    window.localStorage.setItem(dismissedUpdateStorageKey, version);
+  } catch {
+    // Ignore storage failures; the banner can still be dismissed for this session.
+  }
+}
+
+function hideUpdateBanner(): void {
+  availableUpdateVersion = undefined;
+  updateDownloadUrl = undefined;
+  updateBanner.hidden = true;
+}
+
+function showUpdateBanner(result: UpdateCheckResult): void {
+  const latest = result.latest;
+  if (!latest || result.status !== "available") {
+    hideUpdateBanner();
+    return;
+  }
+
+  if (getDismissedUpdateVersion() === latest.version) return;
+
+  availableUpdateVersion = latest.version;
+  updateDownloadUrl = latest.downloadUrl;
+  updateTitle.textContent = `chickenshop ${latest.version} is ready`;
+  updateNotes.textContent = latest.notes ?? "";
+  updateNotes.hidden = !latest.notes;
+  updateBanner.hidden = false;
+}
+
+async function checkForUpdates(): Promise<void> {
+  if (!window.newideUpdate?.check) return;
+
+  try {
+    const result = await window.newideUpdate.check();
+    showUpdateBanner(result);
+  } catch {
+    hideUpdateBanner();
+  }
+}
+
+function scheduleUpdateChecks(): void {
+  window.setTimeout(() => {
+    void checkForUpdates();
+  }, 1500);
+
+  window.setInterval(() => {
+    void checkForUpdates();
+  }, updateCheckIntervalMs);
 }
 
 function renderTerminals(): void {
@@ -1062,9 +1145,18 @@ async function loadProject(
 }
 
 async function openProjectPicker(): Promise<void> {
-  if (!window.newideProject?.openFolder) return;
-  const project = await window.newideProject.openFolder();
-  if (project) await loadProject(project);
+  if (!window.newideProject?.openFolder || isProjectPickerOpen) return;
+
+  isProjectPickerOpen = true;
+  setOpenProjectSelected(true);
+
+  try {
+    const project = await window.newideProject.openFolder();
+    if (project) await loadProject(project);
+  } finally {
+    isProjectPickerOpen = false;
+    setOpenProjectSelected(false);
+  }
 }
 
 document.querySelectorAll<HTMLElement>("[data-window-action]").forEach((button) => {
@@ -1078,10 +1170,20 @@ document.querySelectorAll<HTMLElement>("[data-sidebar-toggle]").forEach((button)
   button.addEventListener("click", toggleSidebar);
 });
 
-document.querySelectorAll<HTMLElement>("[data-open-project]").forEach((button) => {
+openProjectButtons.forEach((button) => {
   button.addEventListener("click", () => {
     void openProjectPicker();
   });
+});
+
+updateDismissButton.addEventListener("click", () => {
+  if (availableUpdateVersion) setDismissedUpdateVersion(availableUpdateVersion);
+  hideUpdateBanner();
+});
+
+updateDownloadButton.addEventListener("click", () => {
+  if (!updateDownloadUrl) return;
+  void window.newideUpdate?.openDownload(updateDownloadUrl);
 });
 
 const terminalAddButton = document.querySelector<HTMLElement>(".terminal-add");
@@ -1208,6 +1310,9 @@ function applyWindowState({ expanded }: WindowState): void {
 void window.newideWindow?.getState().then(applyWindowState);
 window.newideWindow?.onStateChange(applyWindowState);
 window.newideWindow?.onToggleSidebar(toggleSidebar);
+window.newideProject?.onFolderPickerClosed(() => {
+  setOpenProjectSelected(false);
+});
 
 window.newideTerminal?.onData(({ id, data }) => {
   appendTerminalOutput(id, data);
@@ -1236,10 +1341,15 @@ async function initializeEditor(): Promise<void> {
   await loadProject(fallbackProject);
 }
 
+async function initializeApp(): Promise<void> {
+  await initializeEditor();
+  scheduleUpdateChecks();
+}
+
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
-    void initializeEditor();
+    void initializeApp();
   }, { once: true });
 } else {
-  void initializeEditor();
+  void initializeApp();
 }

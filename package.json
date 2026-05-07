@@ -11,10 +11,35 @@
     "prestart": "npm run build",
     "start": "electron .",
     "predev": "npm run build",
-    "dev": "electron ."
+    "dev": "electron .",
+    "pack": "npm run build && electron-builder --dir --publish never",
+    "dist": "npm run build && electron-builder --publish never"
+  },
+  "build": {
+    "appId": "com.akhil.chickenshop",
+    "productName": "chickenshop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    }
+  },
+  "chickenshop": {
+    "updateFeedUrl": ""
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
+    "electron-builder": "^26.0.12",
     "electron": "41.3.0",
     "typescript": "^6.0.3"
   },

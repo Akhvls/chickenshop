@@ -42,12 +42,12 @@
 
       <aside class="sidebar">
         <nav class="primary-nav" aria-label="primary">
-          <button class="nav-item" type="button" data-open-project>
-            <img class="ui-icon nav-icon new-project-icon" src="./assets/icons/new-project-wings-logo-style.png" alt="" aria-hidden="true" />
+          <button class="nav-item" type="button" aria-pressed="false" data-open-project>
+            <img class="ui-icon nav-icon" src="./assets/icons/nav-plus.svg" alt="" aria-hidden="true" />
             <span>new project</span>
           </button>
           <button class="nav-item" type="button">
-            <img class="ui-icon nav-icon" src="./assets/icons/search-chicken-logo-style.png" alt="" aria-hidden="true" />
+            <img class="ui-icon nav-icon" src="./assets/icons/nav-search.svg" alt="" aria-hidden="true" />
             <span>search</span>
           </button>
         </nav>
@@ -56,7 +56,7 @@
           <div class="section-heading">
             <span>terminal</span>
             <button class="tiny-button terminal-add" type="button" aria-label="add terminal">
-              <img class="ui-icon terminal-add-icon" src="./assets/icons/terminal-add-icon.png" alt="" aria-hidden="true" />
+              <img class="ui-icon sidebar-action-icon terminal-add-icon" src="./assets/icons/terminal-add-icon.png" alt="" aria-hidden="true" />
             </button>
           </div>
 
@@ -67,7 +67,7 @@
           <div class="section-heading">
             <span>explorer</span>
             <button class="tiny-button project-add" type="button" aria-label="new file">
-              <img class="ui-icon" src="./assets/icons/new-file-icon.png" alt="" aria-hidden="true" />
+              <img class="ui-icon sidebar-action-icon project-add-icon" src="./assets/icons/generate-file-icon.svg" alt="" aria-hidden="true" />
             </button>
           </div>
 
@@ -131,6 +131,20 @@
         </section>
       </main>
     </div>
+
+    <section class="update-banner" role="status" aria-live="polite" hidden data-update-banner>
+      <div class="update-banner-copy">
+        <span class="update-kicker">update available</span>
+        <strong data-update-title></strong>
+        <p data-update-notes hidden></p>
+      </div>
+      <div class="update-banner-actions">
+        <button class="update-button secondary" type="button" data-update-dismiss>later</button>
+        <button class="update-button primary" type="button" data-update-download>
+          download update
+        </button>
+      </div>
+    </section>
 
     <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
     <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

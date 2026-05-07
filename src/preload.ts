@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   NewideProjectApi,
   NewideTerminalApi,
+  NewideUpdateApi,
   NewideWindowApi,
   TerminalDataPayload,
   TerminalExitPayload,
@@ -28,7 +29,12 @@ const windowApi: NewideWindowApi = {
 const projectApi: NewideProjectApi = {
   getDefault: () => ipcRenderer.invoke("project:get-default"),
   openFolder: () => ipcRenderer.invoke("project:open-folder"),
-  readFile: (filePath) => ipcRenderer.invoke("project:read-file", filePath)
+  readFile: (filePath) => ipcRenderer.invoke("project:read-file", filePath),
+  onFolderPickerClosed: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("project:folder-picker-closed", listener);
+    return () => ipcRenderer.removeListener("project:folder-picker-closed", listener);
+  }
 };
 
 const terminalApi: NewideTerminalApi = {
@@ -50,6 +56,12 @@ const terminalApi: NewideTerminalApi = {
   }
 };
 
+const updateApi: NewideUpdateApi = {
+  check: () => ipcRenderer.invoke("update:check"),
+  openDownload: (url) => ipcRenderer.invoke("update:open-download", url)
+};
+
 contextBridge.exposeInMainWorld("newideWindow", windowApi);
 contextBridge.exposeInMainWorld("newideProject", projectApi);
 contextBridge.exposeInMainWorld("newideTerminal", terminalApi);
+contextBridge.exposeInMainWorld("newideUpdate", updateApi);

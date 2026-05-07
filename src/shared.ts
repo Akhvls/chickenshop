@@ -60,6 +60,24 @@ export interface TerminalResizeRequest {
   rows: number;
 }
 
+export interface UpdateFeedInfo {
+  version: string;
+  downloadUrl: string;
+  notes?: string;
+  releasedAt?: string;
+}
+
+export type UpdateCheckStatus = "disabled" | "current" | "available" | "error";
+
+export interface UpdateCheckResult {
+  status: UpdateCheckStatus;
+  currentVersion: string;
+  checkedAt: string;
+  feedUrl?: string;
+  latest?: UpdateFeedInfo;
+  message?: string;
+}
+
 export type Unsubscribe = () => void;
 
 export interface NewideWindowApi {
@@ -75,6 +93,7 @@ export interface NewideProjectApi {
   getDefault(): Promise<ProjectDirectoryNode>;
   openFolder(): Promise<ProjectDirectoryNode | null>;
   readFile(filePath: string): Promise<ProjectFileContents>;
+  onFolderPickerClosed(callback: () => void): Unsubscribe;
 }
 
 export interface NewideTerminalApi {
@@ -84,4 +103,9 @@ export interface NewideTerminalApi {
   dispose(id: string): Promise<boolean>;
   onData(callback: (payload: TerminalDataPayload) => void): Unsubscribe;
   onExit(callback: (payload: TerminalExitPayload) => void): Unsubscribe;
+}
+
+export interface NewideUpdateApi {
+  check(): Promise<UpdateCheckResult>;
+  openDownload(url: string): Promise<boolean>;
 }

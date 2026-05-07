@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell as electronShell } from "electron";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +12,9 @@ import type {
   TerminalResizeRequest,
   TerminalSession,
   TerminalSize,
-  TerminalWriteRequest
+  TerminalWriteRequest,
+  UpdateCheckResult,
+  UpdateFeedInfo
 } from "./shared";
 
 interface ScanCounter {
@@ -29,10 +31,17 @@ interface BackendTerminal {
   process: IPty;
 }
 
+interface PackageUpdateConfig {
+  chickenshop?: {
+    updateFeedUrl?: string;
+  };
+}
+
 let mainWindow: BrowserWindow | undefined;
 let terminalCounter = 0;
 let pty: typeof import("node-pty") | undefined;
 let ptyLoadError: Error | undefined;
+let cachedUpdateFeedUrl: string | undefined;
 
 try {
   pty = require("node-pty") as typeof import("node-pty");
@@ -160,6 +169,139 @@ async function readProjectFile(filePath: string): Promise<ProjectFileContents> {
 
 function getDefaultProjectPath(): string {
   return path.resolve(__dirname, "..");
+}
+
+function getIsoTimestamp(): string {
+  return new Date().toISOString();
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function parseVersion(version: string): number[] {
+  return version
+    .split(/[.-]/)
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = parseVersion(left);
+  const rightParts = parseVersion(right);
+  const maxLength = Math.max(leftParts.length, rightParts.length, 3);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+
+  return 0;
+}
+
+function normalizeUpdateFeed(value: unknown): UpdateFeedInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+
+  const feed = value as Record<string, unknown>;
+  const version = typeof feed.version === "string" ? feed.version.trim() : "";
+  const downloadUrl =
+    typeof feed.downloadUrl === "string" ? feed.downloadUrl.trim() : "";
+
+  if (!version || !isHttpUrl(downloadUrl)) return undefined;
+
+  return {
+    version,
+    downloadUrl,
+    notes: typeof feed.notes === "string" ? feed.notes.trim() : undefined,
+    releasedAt:
+      typeof feed.releasedAt === "string" ? feed.releasedAt.trim() : undefined
+  };
+}
+
+async function getUpdateFeedUrl(): Promise<string> {
+  const envUrl = process.env.CHICKENSHOP_UPDATE_FEED_URL?.trim();
+  if (envUrl) return envUrl;
+
+  if (cachedUpdateFeedUrl !== undefined) return cachedUpdateFeedUrl;
+
+  try {
+    const packageJsonPath = path.join(app.getAppPath(), "package.json");
+    const packageConfig = JSON.parse(
+      await fs.readFile(packageJsonPath, "utf8")
+    ) as PackageUpdateConfig;
+    cachedUpdateFeedUrl = packageConfig.chickenshop?.updateFeedUrl?.trim() ?? "";
+  } catch {
+    cachedUpdateFeedUrl = "";
+  }
+
+  return cachedUpdateFeedUrl;
+}
+
+async function checkForUpdate(): Promise<UpdateCheckResult> {
+  const currentVersion = app.getVersion();
+  const checkedAt = getIsoTimestamp();
+  const feedUrl = await getUpdateFeedUrl();
+
+  if (!feedUrl) {
+    return {
+      status: "disabled",
+      currentVersion,
+      checkedAt,
+      message: "No update feed URL is configured."
+    };
+  }
+
+  if (!isHttpUrl(feedUrl)) {
+    return {
+      status: "error",
+      currentVersion,
+      checkedAt,
+      feedUrl,
+      message: "The configured update feed URL must start with http:// or https://."
+    };
+  }
+
+  try {
+    const response = await fetch(feedUrl, {
+      headers: {
+        accept: "application/json",
+        "cache-control": "no-cache"
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Update feed returned HTTP ${response.status}.`);
+    }
+
+    const latest = normalizeUpdateFeed(await response.json());
+    if (!latest) {
+      throw new Error("Update feed JSON is missing a valid version or downloadUrl.");
+    }
+
+    return {
+      status: compareVersions(latest.version, currentVersion) > 0
+        ? "available"
+        : "current",
+      currentVersion,
+      checkedAt,
+      feedUrl,
+      latest
+    };
+  } catch (error: unknown) {
+    return {
+      status: "error",
+      currentVersion,
+      checkedAt,
+      feedUrl,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
 }
 
 function sendTerminalPayload(
@@ -340,6 +482,7 @@ ipcMain.handle("project:open-folder", async () => {
     message: "Choose a project folder",
     properties: ["openDirectory"]
   });
+  mainWindow.webContents.send("project:folder-picker-closed");
 
   if (result.canceled || !result.filePaths[0]) return null;
   return buildProject(result.filePaths[0]);
@@ -365,5 +508,13 @@ ipcMain.handle("terminal:resize", (_event, { id, cols, rows }: TerminalResizeReq
 
 ipcMain.handle("terminal:dispose", (_event, id: string) => {
   disposeTerminal(id);
+  return true;
+});
+
+ipcMain.handle("update:check", () => checkForUpdate());
+
+ipcMain.handle("update:open-download", (_event, url: string) => {
+  if (!isHttpUrl(url)) return false;
+  void electronShell.openExternal(url);
   return true;
 });
