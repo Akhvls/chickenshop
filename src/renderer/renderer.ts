@@ -126,7 +126,7 @@ This surface should behave like a quiet text editor: open a file, read it, edit 
       content: `Scratch
 
 - Keep the app text-first.
-- Sidebar: New file, Search, Projects.
+- Sidebar: new project, search, explorer.
 - Main pane: editable file content, not a chat transcript.
 - Later: wire this to real file open/save actions.`
     },
@@ -140,7 +140,7 @@ This surface should behave like a quiet text editor: open a file, read it, edit 
 1. Text editor shell
 2. Project file tree
 3. Real open/save support
-4. Search across notes
+4. search across notes
 5. Optional agent actions once the editor foundation feels right`
     }
   ]
@@ -246,27 +246,8 @@ function fileTypeIcon(fileName: string, className = "tab-file-icon"): HTMLImageE
   return image;
 }
 
-function svgIcon(className: string, paths: string[]): SVGSVGElement {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.classList.add("ui-icon", className);
-  svg.setAttribute("viewBox", "0 0 18 18");
-  svg.setAttribute("aria-hidden", "true");
-
-  paths.forEach((pathData) => {
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", pathData);
-    svg.append(path);
-  });
-
-  return svg;
-}
-
-function terminalIcon(className = "terminal-icon"): SVGSVGElement {
-  return svgIcon(className, [
-    "M3.25 4.25h11.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2H3.25a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z",
-    "m4.75 7.15 1.85 1.6-1.85 1.6",
-    "M8 10.45h3.25"
-  ]);
+function terminalIcon(className = "terminal-icon"): HTMLImageElement {
+  return icon("terminal-icon", `ui-icon ${className}`);
 }
 
 function showViewer(viewerType: ViewerType | "terminal"): void {
@@ -341,7 +322,7 @@ function getTabDetails(tab: OpenTab): TabDetails | undefined {
   return {
     name: terminal.name,
     title: terminal.cwd,
-    closeLabel: `Close ${terminal.name}`
+    closeLabel: `close ${terminal.name}`
   };
 }
 
@@ -354,7 +335,7 @@ function renderTerminalRenameInput(
   input.className = className;
   input.value = terminal.name;
   input.dataset.terminalRename = `${target}:${terminal.id}`;
-  input.setAttribute("aria-label", "Terminal name");
+  input.setAttribute("aria-label", "terminal name");
   input.spellcheck = false;
 
   input.addEventListener("click", (event) => {
@@ -559,7 +540,7 @@ function renderTerminals(): void {
       close.className = "terminal-row-close";
       close.type = "button";
       close.dataset.terminalClose = terminal.id;
-      close.setAttribute("aria-label", `Close ${terminal.name}`);
+      close.setAttribute("aria-label", `close ${terminal.name}`);
       close.append(icon("close", "ui-icon terminal-row-close-icon"));
       row.append(close);
 
@@ -890,9 +871,9 @@ async function createTerminalSession(): Promise<void> {
       terminal = {
         id,
         name: "terminal",
-        cwd: "Unavailable"
+        cwd: "unavailable"
       };
-      startupOutput = `Terminal failed to start: ${getErrorMessage(error)}\r\n`;
+      startupOutput = `terminal failed to start: ${getErrorMessage(error)}\r\n`;
       terminalExited = true;
     }
   } else {
@@ -900,9 +881,9 @@ async function createTerminalSession(): Promise<void> {
     terminal = {
       id,
       name: "terminal",
-      cwd: "Preview"
+      cwd: "preview"
     };
-    startupOutput = "Terminal execution is only available in the Electron desktop app.\r\n";
+    startupOutput = "terminal execution is only available in the Electron desktop app.\r\n";
     terminalExited = true;
   }
 
@@ -970,7 +951,7 @@ async function openProjectFile(filePath: string | undefined): Promise<void> {
         name: projectFile.name,
         path: projectFile.path,
         viewer: "text",
-        status: projectFile.readonly ? "Preview" : "",
+        status: projectFile.readonly ? "preview" : "",
         content: projectFile.content,
         readonly: projectFile.readonly
       };
@@ -1097,8 +1078,10 @@ document.querySelectorAll<HTMLElement>("[data-sidebar-toggle]").forEach((button)
   button.addEventListener("click", toggleSidebar);
 });
 
-document.querySelector<HTMLElement>("[data-open-project]")?.addEventListener("click", () => {
-  void openProjectPicker();
+document.querySelectorAll<HTMLElement>("[data-open-project]").forEach((button) => {
+  button.addEventListener("click", () => {
+    void openProjectPicker();
+  });
 });
 
 const terminalAddButton = document.querySelector<HTMLElement>(".terminal-add");
@@ -1197,15 +1180,6 @@ if ("ResizeObserver" in window) {
     fitTerminal(activeTerminalId ? terminals[activeTerminalId] : undefined);
   }).observe(terminalScreen);
 }
-
-document.querySelectorAll<HTMLElement>(".primary-nav .nav-item").forEach((button) => {
-  button.addEventListener("click", () => {
-    document
-      .querySelectorAll<HTMLElement>(".primary-nav .nav-item")
-      .forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-  });
-});
 
 editor.addEventListener("input", () => {
   if (isLoadingFile || !activeFileId) return;

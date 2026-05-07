@@ -167,6 +167,12 @@ body.window-expanded .traffic-spacer {
   height: 18px;
 }
 
+.new-project-icon {
+  width: 21px;
+  height: 21px;
+  margin-right: -3px;
+}
+
 .primary-nav {
   display: grid;
   gap: 4px;
@@ -193,11 +199,6 @@ body.window-expanded .traffic-spacer {
   border-radius: 8px;
   font-size: 14px;
   font-weight: 400;
-}
-
-.nav-item.active {
-  background: rgba(255, 255, 255, 0.52);
-  color: var(--text-strong);
 }
 
 .nav-item span,
@@ -278,7 +279,7 @@ body.window-expanded .traffic-spacer {
 }
 
 .terminal-row.selected {
-  background: var(--selection);
+  background: var(--terminal-tint-active);
   color: var(--text-strong);
 }
 
@@ -335,11 +336,7 @@ body.window-expanded .traffic-spacer {
 
 .terminal-icon,
 .terminal-add-icon {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.55;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  object-fit: contain;
 }
 
 .project-tree {
@@ -377,6 +374,7 @@ body.window-expanded .traffic-spacer {
 
 .tree-item {
   --tree-depth: 0;
+  position: relative;
   gap: 7px;
   min-height: 30px;
   padding: 2px 8px 3px calc(8px + var(--tree-depth) * 18px);
@@ -397,8 +395,19 @@ body.window-expanded .traffic-spacer {
   opacity: 0.62;
 }
 
-.tree-chevron-spacer {
+.folder-row[aria-expanded="false"] .tree-chevron {
+  position: absolute;
+  left: calc(-6px + var(--tree-depth) * 18px);
   opacity: 0;
+}
+
+.folder-row[aria-expanded="false"]:hover .tree-chevron,
+.folder-row[aria-expanded="false"]:focus-visible .tree-chevron {
+  opacity: 0.62;
+}
+
+.tree-chevron-spacer {
+  display: none;
 }
 
 .folder-row {
@@ -528,21 +537,12 @@ body.window-expanded .traffic-spacer {
 
 .tab-file-icon,
 .tab-terminal-icon {
+  display: block;
+  flex: 0 0 15px;
   width: 15px;
   height: 15px;
   margin-right: 7px;
-}
-
-.tab-file-icon {
   object-fit: contain;
-}
-
-.tab-terminal-icon {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.55;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .tab-close {

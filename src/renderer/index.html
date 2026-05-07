@@ -41,28 +41,22 @@
       </header>
 
       <aside class="sidebar">
-        <nav class="primary-nav" aria-label="Primary">
-          <button class="nav-item active" type="button">
-            <img class="ui-icon nav-icon" src="./assets/icons/plus.png" alt="" aria-hidden="true" />
-            <span>New file</span>
+        <nav class="primary-nav" aria-label="primary">
+          <button class="nav-item" type="button" data-open-project>
+            <img class="ui-icon nav-icon new-project-icon" src="./assets/icons/new-project-wings-logo-style.png" alt="" aria-hidden="true" />
+            <span>new project</span>
           </button>
           <button class="nav-item" type="button">
-            <img class="ui-icon nav-icon" src="./assets/icons/eye.png" alt="" aria-hidden="true" />
-            <span>Search</span>
+            <img class="ui-icon nav-icon" src="./assets/icons/search-chicken-logo-style.png" alt="" aria-hidden="true" />
+            <span>search</span>
           </button>
         </nav>
 
-        <section class="sidebar-section terminal-section" aria-label="Terminals">
+        <section class="sidebar-section terminal-section" aria-label="terminal">
           <div class="section-heading">
-            <span>Terminals</span>
-            <button class="tiny-button terminal-add" type="button" aria-label="Add terminal">
-              <svg class="ui-icon terminal-add-icon" viewBox="0 0 18 18" aria-hidden="true">
-                <path d="M3.25 4.25h7.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2h-7.5a2 2 0 0 1-2-2v-5.5a2 2 0 0 1 2-2Z" />
-                <path d="m4.25 7 1.75 1.5-1.75 1.5" />
-                <path d="M7.25 10.25h2.5" />
-                <path d="M13.75 2.25v4" />
-                <path d="M11.75 4.25h4" />
-              </svg>
+            <span>terminal</span>
+            <button class="tiny-button terminal-add" type="button" aria-label="add terminal">
+              <img class="ui-icon terminal-add-icon" src="./assets/icons/terminal-add-icon.png" alt="" aria-hidden="true" />
             </button>
           </div>
 
@@ -71,19 +65,19 @@
 
         <section class="sidebar-section project-section">
           <div class="section-heading">
-            <span>Projects</span>
-            <button class="tiny-button project-add" type="button" aria-label="Add new project" data-open-project>
-              <img class="ui-icon" src="./assets/icons/folder-plus.png" alt="" aria-hidden="true" />
+            <span>explorer</span>
+            <button class="tiny-button project-add" type="button" aria-label="new file">
+              <img class="ui-icon" src="./assets/icons/new-file-icon.png" alt="" aria-hidden="true" />
             </button>
           </div>
 
-          <div class="project-tree" aria-label="Projects" data-project-tree></div>
+          <div class="project-tree" aria-label="explorer" data-project-tree></div>
         </section>
 
         <div class="sidebar-bottom">
           <button class="nav-item" type="button">
             <img class="ui-icon nav-icon" src="./assets/icons/settings.png" alt="" aria-hidden="true" />
-            <span>Settings</span>
+            <span>settings</span>
           </button>
         </div>
       </aside>
@@ -129,7 +123,7 @@
             class="viewer-pane terminal-viewer terminal-screen"
             role="textbox"
             tabindex="0"
-            aria-label="Terminal session"
+            aria-label="terminal session"
             aria-multiline="true"
             data-viewer-panel="terminal"
             data-terminal-screen
