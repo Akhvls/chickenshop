@@ -5,6 +5,7 @@ type NewideProjectApi = import("../shared").NewideProjectApi;
 type NewideTerminalApi = import("../shared").NewideTerminalApi;
 type NewideUpdateApi = import("../shared").NewideUpdateApi;
 type NewideWindowApi = import("../shared").NewideWindowApi;
+type TerminalKind = import("../shared").TerminalKind;
 type TerminalSession = import("../shared").TerminalSession;
 type UpdateCheckResult = import("../shared").UpdateCheckResult;
 type WindowState = import("../shared").WindowState;
@@ -262,8 +263,11 @@ function fileTypeIcon(fileName: string, className = "tab-file-icon"): HTMLImageE
   return image;
 }
 
-function terminalIcon(className = "terminal-icon"): HTMLImageElement {
-  return icon("terminal-icon", `ui-icon ${className}`);
+function terminalKindIcon(
+  kind: TerminalKind | undefined,
+  className = "terminal-icon"
+): HTMLImageElement {
+  return icon(kind === "codex" ? "codex-agent-icon" : "terminal-icon", `ui-icon ${className}`);
 }
 
 function showViewer(viewerType: ViewerType | "terminal"): void {
@@ -477,7 +481,7 @@ function renderOpenTabs(): void {
       select.title = details.title;
 
       if (openTab.type === "terminal") {
-        select.append(terminalIcon("tab-terminal-icon"));
+        select.append(terminalKindIcon(terminals[openTab.id]?.kind, "tab-terminal-icon"));
       } else {
         select.append(fileTypeIcon(details.name));
       }
@@ -518,6 +522,12 @@ function renderOpenTabs(): void {
 function renderSidebarStates(): void {
   document.querySelectorAll<HTMLElement>("[data-file-path]").forEach((button) => {
     const isActive = button.dataset.filePath === activeFileId;
+    button.classList.toggle("selected", isActive);
+    button.classList.toggle("is-active", isActive);
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-agent-terminal-id]").forEach((button) => {
+    const isActive = button.dataset.agentTerminalId === activeTerminalId;
     button.classList.toggle("selected", isActive);
     button.classList.toggle("is-active", isActive);
   });
@@ -596,10 +606,11 @@ function renderTerminals(): void {
       const row = document.createElement("div");
       row.className = "terminal-row";
       row.classList.toggle("selected", terminal.id === activeTerminalId);
+      row.classList.toggle("codex-terminal-row", terminal.kind === "codex");
       row.setAttribute("role", "button");
       row.tabIndex = 0;
       row.dataset.terminalId = terminal.id;
-      row.append(terminalIcon());
+      row.append(terminalKindIcon(terminal.kind));
 
       const isRenaming =
         editingTerminalId === terminal.id && editingTerminalRenameTarget === "sidebar";
@@ -703,6 +714,60 @@ function expandParentsForPath(
   return false;
 }
 
+function normalizeProjectPath(projectPath: string): string {
+  return projectPath.replace(/[\\/]+$/, "");
+}
+
+function isSameProjectPath(leftPath: string, rightPath: string): boolean {
+  return normalizeProjectPath(leftPath) === normalizeProjectPath(rightPath);
+}
+
+function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
+  const normalizedTarget = normalizeProjectPath(targetPath);
+  const normalizedDirectory = normalizeProjectPath(directoryPath);
+  return (
+    normalizedTarget === normalizedDirectory ||
+    normalizedTarget.startsWith(`${normalizedDirectory}/`)
+  );
+}
+
+function findContainingDirectoryPath(
+  targetPath: string,
+  node: ProjectNode | undefined = activeProject
+): string | undefined {
+  if (!node || node.type !== "directory" || !isPathInsideDirectory(targetPath, node.path)) {
+    return undefined;
+  }
+
+  for (const child of node.children) {
+    if (child.type !== "directory") continue;
+
+    const match = findContainingDirectoryPath(targetPath, child);
+    if (match) return match;
+  }
+
+  return node.path;
+}
+
+function expandDirectoriesForPath(
+  targetPath: string,
+  node: ProjectNode | undefined = activeProject
+): boolean {
+  if (!node || node.type !== "directory" || !isPathInsideDirectory(targetPath, node.path)) {
+    return false;
+  }
+
+  expandedFolders.add(node.path);
+
+  for (const child of node.children) {
+    if (child.type === "directory" && expandDirectoriesForPath(targetPath, child)) {
+      return true;
+    }
+  }
+
+  return isSameProjectPath(targetPath, node.path);
+}
+
 function registerFallbackFiles(node: ProjectNode | undefined): void {
   if (!node) return;
   if (node.type === "file") {
@@ -717,6 +782,50 @@ function registerFallbackFiles(node: ProjectNode | undefined): void {
   }
 
   node.children.forEach(registerFallbackFiles);
+}
+
+function getCodexTerminalsForDirectory(directoryPath: string): RendererTerminal[] {
+  return Object.values(terminals)
+    .filter((terminal) => {
+      if (terminal.kind !== "codex" || terminal.exited) return false;
+      return findContainingDirectoryPath(terminal.cwd) === directoryPath;
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function appendCodexTerminalRows(
+  list: HTMLDivElement,
+  directoryPath: string,
+  depth: number
+): void {
+  getCodexTerminalsForDirectory(directoryPath).forEach((terminal) => {
+    const row = document.createElement("button");
+    row.className = "tree-item agent-terminal-row";
+    row.classList.toggle("selected", terminal.id === activeTerminalId);
+    row.classList.toggle("is-active", terminal.id === activeTerminalId);
+    row.type = "button";
+    row.dataset.agentTerminalId = terminal.id;
+    row.style.setProperty("--tree-depth", String(depth));
+    row.title = terminal.cwd;
+
+    const spacer = document.createElement("span");
+    spacer.className = "tree-chevron tree-chevron-spacer";
+    spacer.setAttribute("aria-hidden", "true");
+    row.append(spacer);
+    row.append(terminalKindIcon("codex", "tree-icon agent-terminal-icon"));
+
+    const title = document.createElement("span");
+    title.className = "file-title agent-terminal-title";
+    title.textContent = "codex";
+    row.append(title);
+
+    const meta = document.createElement("span");
+    meta.className = "file-meta agent-terminal-meta";
+    meta.textContent = terminal.name;
+    row.append(meta);
+
+    list.append(row);
+  });
 }
 
 function renderProjectTree(): void {
@@ -743,14 +852,19 @@ function renderProjectTree(): void {
   rootRow.append(rootButton);
   projectTreeRoot.append(rootRow);
 
-  const children = renderTreeChildren(activeProject.children, 1);
+  const children = renderTreeChildren(activeProject.children, 1, activeProject.path);
   children.hidden = !expandedFolders.has(activeProject.path);
   projectTreeRoot.append(children);
 }
 
-function renderTreeChildren(nodes: ProjectNode[], depth: number): HTMLDivElement {
+function renderTreeChildren(
+  nodes: ProjectNode[],
+  depth: number,
+  directoryPath: string
+): HTMLDivElement {
   const list = document.createElement("div");
   list.className = "file-list tree-children";
+  appendCodexTerminalRows(list, directoryPath, depth);
 
   nodes.forEach((node) => {
     if (node.type === "directory") {
@@ -769,7 +883,7 @@ function renderTreeChildren(nodes: ProjectNode[], depth: number): HTMLDivElement
       row.append(label);
       list.append(row);
 
-      const childList = renderTreeChildren(node.children, depth + 1);
+      const childList = renderTreeChildren(node.children, depth + 1, node.path);
       childList.hidden = !isExpanded;
       list.append(childList);
       return;
@@ -954,7 +1068,8 @@ async function createTerminalSession(): Promise<void> {
       terminal = {
         id,
         name: "terminal",
-        cwd: "unavailable"
+        cwd: "unavailable",
+        kind: "shell"
       };
       startupOutput = `terminal failed to start: ${getErrorMessage(error)}\r\n`;
       terminalExited = true;
@@ -964,7 +1079,8 @@ async function createTerminalSession(): Promise<void> {
     terminal = {
       id,
       name: "terminal",
-      cwd: "preview"
+      cwd: "preview",
+      kind: "shell"
     };
     startupOutput = "terminal execution is only available in the Electron desktop app.\r\n";
     terminalExited = true;
@@ -1100,11 +1216,13 @@ function closeTerminalTab(terminalId: string | undefined): void {
   if (wasActive) {
     activeTerminalId = undefined;
     activateOpenTab(openTabs[Math.min(tabIndex, openTabs.length - 1)]);
+    renderProjectTree();
     return;
   }
 
   renderOpenTabs();
   renderTerminals();
+  renderProjectTree();
 }
 
 async function loadProject(
@@ -1257,6 +1375,15 @@ terminalListRoot.addEventListener("keydown", (event) => {
 });
 
 projectTreeRoot.addEventListener("click", (event) => {
+  const agentTerminalButton = closestElement<HTMLElement>(
+    event.target,
+    "[data-agent-terminal-id]"
+  );
+  if (agentTerminalButton?.dataset.agentTerminalId) {
+    setActiveTerminal(agentTerminalButton.dataset.agentTerminalId);
+    return;
+  }
+
   const fileButton = closestElement<HTMLElement>(event.target, "[data-file-path]");
   if (fileButton) {
     void openProjectFile(fileButton.dataset.filePath);
@@ -1325,6 +1452,24 @@ window.newideTerminal?.onExit(({ id, code }) => {
   terminal.exited = true;
   appendTerminalOutput(id, `\r\n[terminal exited${typeof code === "number" ? ` with code ${code}` : ""}]\r\n`);
   renderTerminals();
+  renderProjectTree();
+});
+
+window.newideTerminal?.onState(({ id, cwd, kind }) => {
+  const terminal = terminals[id];
+  if (!terminal) return;
+
+  terminal.cwd = cwd;
+  terminal.kind = kind;
+
+  if (kind === "codex") {
+    expandDirectoriesForPath(cwd);
+  }
+
+  renderOpenTabs();
+  renderSidebarStates();
+  renderTerminals();
+  renderProjectTree();
 });
 
 async function initializeEditor(): Promise<void> {

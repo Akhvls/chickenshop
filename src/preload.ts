@@ -6,6 +6,7 @@ import type {
   NewideWindowApi,
   TerminalDataPayload,
   TerminalExitPayload,
+  TerminalStatePayload,
   WindowState
 } from "./shared";
 
@@ -53,6 +54,12 @@ const terminalApi: NewideTerminalApi = {
       callback(payload);
     ipcRenderer.on("terminal:exit", listener);
     return () => ipcRenderer.removeListener("terminal:exit", listener);
+  },
+  onState: (callback) => {
+    const listener = (_event: IpcRendererEvent, payload: TerminalStatePayload) =>
+      callback(payload);
+    ipcRenderer.on("terminal:state", listener);
+    return () => ipcRenderer.removeListener("terminal:state", listener);
   }
 };
 

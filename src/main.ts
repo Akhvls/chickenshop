@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell as electronShell } from "electron";
-import { statSync, type Dirent } from "node:fs";
+import { mkdirSync, statSync, writeFileSync, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IPty } from "node-pty";
@@ -9,9 +9,11 @@ import type {
   ProjectNode,
   TerminalDataPayload,
   TerminalExitPayload,
+  TerminalKind,
   TerminalResizeRequest,
   TerminalSession,
   TerminalSize,
+  TerminalStatePayload,
   TerminalWriteRequest,
   UpdateCheckResult,
   UpdateFeedInfo
@@ -27,8 +29,18 @@ interface ScanOptions {
 }
 
 interface BackendTerminal {
+  cwd: string;
   id: string;
+  inputBuffer: string;
+  kind: TerminalKind;
+  outputBuffer: string;
   process: IPty;
+  rootCwd: string;
+}
+
+interface ShellLaunchConfig {
+  args: string[];
+  env: NodeJS.ProcessEnv;
 }
 
 interface PackageUpdateConfig {
@@ -350,11 +362,382 @@ async function checkForUpdate(): Promise<UpdateCheckResult> {
 }
 
 function sendTerminalPayload(
-  channel: "terminal:data" | "terminal:exit",
-  payload: TerminalDataPayload | TerminalExitPayload
+  channel: "terminal:data" | "terminal:exit" | "terminal:state",
+  payload: TerminalDataPayload | TerminalExitPayload | TerminalStatePayload
 ): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send(channel, payload);
+}
+
+function emitTerminalState(terminal: BackendTerminal): void {
+  sendTerminalPayload("terminal:state", {
+    id: terminal.id,
+    cwd: terminal.cwd,
+    kind: terminal.kind
+  });
+}
+
+function updateTerminalState(
+  terminal: BackendTerminal,
+  nextState: Partial<Pick<BackendTerminal, "cwd" | "kind">>
+): void {
+  const nextCwd = nextState.cwd ?? terminal.cwd;
+  const nextKind = nextState.kind ?? terminal.kind;
+
+  if (nextCwd === terminal.cwd && nextKind === terminal.kind) return;
+
+  terminal.cwd = nextCwd;
+  terminal.kind = nextKind;
+  emitTerminalState(terminal);
+}
+
+function getShellIntegrationRoot(): string {
+  const root = path.join(app.getPath("userData"), "shell-integration");
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
+function ensureZshIntegrationDirectory(): string {
+  const directory = path.join(getShellIntegrationRoot(), "zsh");
+  mkdirSync(directory, { recursive: true });
+
+  writeFileSync(
+    path.join(directory, ".zshrc"),
+    String.raw`if [[ -z "$CHICKENSHOP_SHELL_INTEGRATION_SOURCED" ]]; then
+  export CHICKENSHOP_SHELL_INTEGRATION_SOURCED=1
+  if [[ -n "$CHICKENSHOP_ORIGINAL_ZDOTDIR" && -r "$CHICKENSHOP_ORIGINAL_ZDOTDIR/.zshrc" ]]; then
+    source "$CHICKENSHOP_ORIGINAL_ZDOTDIR/.zshrc"
+  elif [[ -r "$HOME/.zshrc" ]]; then
+    source "$HOME/.zshrc"
+  fi
+fi
+
+_chickenshop_report_cwd() {
+  printf '\033]633;P;Cwd=%s\a' "$PWD"
+}
+
+_chickenshop_report_command() {
+  printf '\033]633;E;Command=%s\a' "$1"
+}
+
+autoload -Uz add-zsh-hook 2>/dev/null
+if (( $+functions[add-zsh-hook] )); then
+  add-zsh-hook chpwd _chickenshop_report_cwd
+  add-zsh-hook precmd _chickenshop_report_cwd
+  add-zsh-hook preexec _chickenshop_report_command
+else
+  chpwd_functions+=(_chickenshop_report_cwd)
+  precmd_functions+=(_chickenshop_report_cwd)
+  preexec_functions+=(_chickenshop_report_command)
+fi
+
+_chickenshop_report_cwd
+`,
+    "utf8"
+  );
+
+  return directory;
+}
+
+function ensureBashIntegrationFile(): string {
+  const directory = path.join(getShellIntegrationRoot(), "bash");
+  mkdirSync(directory, { recursive: true });
+  const rcfile = path.join(directory, "bashrc");
+
+  writeFileSync(
+    rcfile,
+    String.raw`if [[ -z "$CHICKENSHOP_SHELL_INTEGRATION_SOURCED" ]]; then
+  export CHICKENSHOP_SHELL_INTEGRATION_SOURCED=1
+  if [[ -r "$HOME/.bashrc" ]]; then
+    source "$HOME/.bashrc"
+  fi
+fi
+
+_chickenshop_report_cwd() {
+  printf '\033]633;P;Cwd=%s\a' "$PWD"
+}
+
+case ";$PROMPT_COMMAND;" in
+  *";_chickenshop_report_cwd;"*) ;;
+  *) PROMPT_COMMAND="_chickenshop_report_cwd${"$"}{PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+
+_chickenshop_report_cwd
+`,
+    "utf8"
+  );
+
+  return rcfile;
+}
+
+function getShellLaunchConfig(shellPath: string): ShellLaunchConfig {
+  const shellName = path.basename(shellPath);
+
+  if (shellName === "zsh") {
+    return {
+      args: [],
+      env: {
+        ...process.env,
+        CHICKENSHOP_ORIGINAL_ZDOTDIR: process.env.ZDOTDIR || app.getPath("home"),
+        ZDOTDIR: ensureZshIntegrationDirectory()
+      }
+    };
+  }
+
+  if (shellName === "bash") {
+    return {
+      args: ["--rcfile", ensureBashIntegrationFile()],
+      env: { ...process.env }
+    };
+  }
+
+  return {
+    args: [],
+    env: { ...process.env }
+  };
+}
+
+function isCodexCommand(command: string): boolean {
+  const normalizedCommand = command
+    .trim()
+    .replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*/, "")
+    .replace(/^(?:command|exec|env|sudo)\s+/, "");
+
+  return /^(?:npx\s+)?(?:[^\s/]+\/)*codex(?:\s|$)/.test(normalizedCommand);
+}
+
+function observeTerminalCommand(terminal: BackendTerminal, command: string): void {
+  if (isCodexCommand(command)) {
+    updateTerminalState(terminal, { kind: "codex" });
+  }
+
+  const cwd = resolveCdCommand(terminal.cwd, command);
+  if (cwd) updateTerminalState(terminal, { cwd });
+}
+
+function observeTerminalInput(terminal: BackendTerminal, data: string): void {
+  for (const character of data) {
+    if (character === "\r" || character === "\n") {
+      observeTerminalCommand(terminal, terminal.inputBuffer);
+      terminal.inputBuffer = "";
+      continue;
+    }
+
+    if (character === "\u0003") {
+      terminal.inputBuffer = "";
+      continue;
+    }
+
+    if (character === "\u007f") {
+      terminal.inputBuffer = terminal.inputBuffer.slice(0, -1);
+      continue;
+    }
+
+    if (character >= " " && character !== "\u007f") {
+      terminal.inputBuffer += character;
+    }
+  }
+}
+
+function expandHomePath(candidatePath: string): string {
+  if (candidatePath === "~") return app.getPath("home");
+  if (candidatePath.startsWith("~/")) return path.join(app.getPath("home"), candidatePath.slice(2));
+  return candidatePath;
+}
+
+function normalizeReportedCwd(cwd: string): string | undefined {
+  try {
+    const decodedCwd = decodeURIComponent(expandHomePath(cwd.trim()));
+    const resolvedCwd = path.resolve(decodedCwd);
+    return isTerminalSafeDirectory(resolvedCwd) ? resolvedCwd : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripAnsiCodes(value: string): string {
+  return value
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[\(\)][A-Za-z0-9]/g, "")
+    .replace(/\u001b[=>]/g, "");
+}
+
+function parseShellWords(command: string): string[] | undefined {
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | undefined;
+  let escaping = false;
+
+  for (const character of command.trim()) {
+    if (escaping) {
+      current += character;
+      escaping = false;
+      continue;
+    }
+
+    if (character === "\\") {
+      escaping = true;
+      continue;
+    }
+
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+
+    if (character === "'" || character === "\"") {
+      quote = character;
+      continue;
+    }
+
+    if (/\s/.test(character)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += character;
+  }
+
+  if (escaping || quote) return undefined;
+  if (current) words.push(current);
+  return words;
+}
+
+function resolveCdCommand(currentCwd: string, command: string): string | undefined {
+  const trimmedCommand = command.trim();
+  if (!trimmedCommand || /[;&|<>()`$]/.test(trimmedCommand)) return undefined;
+
+  const words = parseShellWords(trimmedCommand);
+  if (!words || words.length > 2 || words[0] !== "cd") return undefined;
+
+  const targetPath = expandHomePath(words[1] ?? "~");
+  if (targetPath === "-") return undefined;
+
+  return normalizeReportedCwd(path.isAbsolute(targetPath)
+    ? targetPath
+    : path.resolve(currentCwd, targetPath));
+}
+
+function resolvePromptCwd(terminal: BackendTerminal, promptCwd: string): string | undefined {
+  const fragment = promptCwd.trim();
+  if (!fragment) return undefined;
+
+  if (fragment.startsWith("/") || fragment === "~" || fragment.startsWith("~/")) {
+    return normalizeReportedCwd(fragment);
+  }
+
+  if (fragment.includes("/")) {
+    return normalizeReportedCwd(path.resolve(terminal.cwd, expandHomePath(fragment)))
+      ?? normalizeReportedCwd(path.resolve(terminal.rootCwd, expandHomePath(fragment)));
+  }
+
+  const parentCwd = path.dirname(terminal.cwd);
+  const candidates = [
+    path.basename(terminal.cwd) === fragment ? terminal.cwd : undefined,
+    path.basename(parentCwd) === fragment ? parentCwd : undefined,
+    path.basename(terminal.rootCwd) === fragment ? terminal.rootCwd : undefined,
+    path.join(terminal.cwd, fragment),
+    path.join(parentCwd, fragment),
+    path.join(terminal.rootCwd, fragment)
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const cwd = normalizeReportedCwd(candidate);
+    if (cwd) return cwd;
+  }
+
+  return undefined;
+}
+
+function parseVisiblePromptCwd(terminal: BackendTerminal, line: string): string | undefined {
+  const promptMatch = line.match(/^(?:\S+@\S+\s+)?(.+?)\s+[%$#]\s*$/);
+  if (!promptMatch) return undefined;
+  return resolvePromptCwd(terminal, promptMatch[1]);
+}
+
+function observeCodexWorkingDirectoryLine(terminal: BackendTerminal, rawLine: string): void {
+  if (terminal.kind !== "codex") return;
+
+  const normalizedLine = stripAnsiCodes(rawLine)
+    .replace(/[│└╰├─•]/g, " ")
+    .trim();
+
+  const pathMatch = normalizedLine.match(/^((?:~(?:\/|$)|\/)[^<>:"|?*\r\n]*)$/);
+  if (pathMatch) {
+    const cwd = normalizeReportedCwd(pathMatch[1]);
+    if (cwd) updateTerminalState(terminal, { cwd });
+    return;
+  }
+
+  const directoryLabelMatch = normalizedLine.match(/\bdirectory:\s+((?:~(?:\/|$)|\/)[^│\r\n]+)$/);
+  if (directoryLabelMatch) {
+    const cwd = normalizeReportedCwd(directoryLabelMatch[1]);
+    if (cwd) updateTerminalState(terminal, { cwd });
+    return;
+  }
+
+  const promptCwd = parseVisiblePromptCwd(terminal, normalizedLine);
+  if (promptCwd) updateTerminalState(terminal, { cwd: promptCwd });
+}
+
+function observeCodexWorkingDirectoryOutput(terminal: BackendTerminal, data: string): void {
+  if (terminal.kind !== "codex") return;
+
+  terminal.outputBuffer = `${terminal.outputBuffer}${data}`.slice(-4096);
+  const lines = terminal.outputBuffer.split(/\r\n|\r|\n/);
+  terminal.outputBuffer = lines.pop() ?? "";
+
+  for (const line of lines) {
+    observeCodexWorkingDirectoryLine(terminal, line);
+  }
+
+  observeCodexWorkingDirectoryLine(terminal, terminal.outputBuffer);
+}
+
+function processTerminalData(terminal: BackendTerminal, data: string): string {
+  let cleanedData = data.replace(
+    /\u001b\]633;([PE]);(?:Cwd|Command)=([^\u0007\u001b]*)(?:\u0007|\u001b\\)/g,
+    (_match, marker: string, value: string) => {
+      if (marker === "P") {
+        const cwd = normalizeReportedCwd(value);
+        if (cwd) updateTerminalState(terminal, { cwd });
+      } else {
+        observeTerminalCommand(terminal, value);
+      }
+
+      return "";
+    }
+  );
+
+  cleanedData = cleanedData.replace(
+    /\u001b\]7;([^\u0007\u001b]*)(?:\u0007|\u001b\\)/g,
+    (_match, value: string) => {
+      try {
+        const url = new URL(value);
+        if (url.protocol === "file:") {
+          const cwd = normalizeReportedCwd(url.pathname);
+          if (cwd) updateTerminalState(terminal, { cwd });
+        }
+      } catch {
+        // Ignore malformed shell integration output from user shells.
+      }
+
+      return "";
+    }
+  );
+
+  observeCodexWorkingDirectoryOutput(terminal, cleanedData);
+
+  return cleanedData;
 }
 
 function disposeTerminal(id: string): void {
@@ -386,13 +769,14 @@ function createTerminal({ cols = 120, rows = 30, cwd: requestedCwd }: TerminalSi
   const cwd = getTerminalWorkingDirectory(requestedCwd);
   const id = `terminal-${++terminalCounter}`;
   const shell = process.env.SHELL || "/bin/zsh";
-  const terminalProcess = pty.spawn(shell, [], {
+  const launchConfig = getShellLaunchConfig(shell);
+  const terminalProcess = pty.spawn(shell, launchConfig.args, {
     name: "xterm-256color",
     cols,
     rows,
     cwd,
     env: {
-      ...process.env,
+      ...launchConfig.env,
       COLORTERM: "truecolor",
       TERM: "xterm-256color",
       TERM_PROGRAM: "chickenshop"
@@ -400,12 +784,21 @@ function createTerminal({ cols = 120, rows = 30, cwd: requestedCwd }: TerminalSi
   });
 
   terminalProcesses.set(id, {
+    cwd,
     id,
-    process: terminalProcess
+    inputBuffer: "",
+    kind: "shell",
+    outputBuffer: "",
+    process: terminalProcess,
+    rootCwd: cwd
   });
 
+  const terminal = terminalProcesses.get(id);
+
   terminalProcess.onData((data) => {
-    sendTerminalPayload("terminal:data", { id, data });
+    if (!terminal) return;
+    const cleanedData = processTerminalData(terminal, data);
+    if (cleanedData) sendTerminalPayload("terminal:data", { id, data: cleanedData });
   });
 
   terminalProcess.onExit(({ exitCode }) => {
@@ -416,6 +809,7 @@ function createTerminal({ cols = 120, rows = 30, cwd: requestedCwd }: TerminalSi
   return {
     id,
     cwd,
+    kind: "shell",
     name: path.basename(cwd) || "terminal"
   };
 }
@@ -540,6 +934,7 @@ ipcMain.handle("terminal:create", (_event, size?: TerminalSize) => createTermina
 ipcMain.handle("terminal:write", (_event, { id, data }: TerminalWriteRequest) => {
   const terminal = terminalProcesses.get(id);
   if (!terminal) return false;
+  observeTerminalInput(terminal, data);
   terminal.process.write(data);
   return true;
 });

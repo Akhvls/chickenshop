@@ -353,8 +353,16 @@ body.window-expanded .traffic-spacer {
 }
 
 .terminal-icon,
-.terminal-add-icon {
+.terminal-add-icon,
+.agent-terminal-icon {
   object-fit: contain;
+}
+
+.terminal-icon,
+.agent-terminal-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
 }
 
 .project-tree {
@@ -438,14 +446,40 @@ body.window-expanded .traffic-spacer {
   color: var(--text-strong);
 }
 
+.agent-terminal-row.selected,
+.agent-terminal-row.is-active {
+  background: var(--terminal-tint-active);
+  color: var(--text-strong);
+}
+
 .file-title {
   flex: 1;
   line-height: 1.35;
 }
 
 .file-row.selected .file-title,
-.file-row.is-active .file-title {
+.file-row.is-active .file-title,
+.agent-terminal-row.selected .agent-terminal-title,
+.agent-terminal-row.is-active .agent-terminal-title {
   font-weight: 500;
+}
+
+.agent-terminal-row {
+  color: var(--text);
+}
+
+.agent-terminal-row:hover {
+  background: var(--terminal-tint-hover);
+  color: var(--text-strong);
+}
+
+.agent-terminal-row.selected:hover,
+.agent-terminal-row.is-active:hover {
+  background: var(--terminal-tint-strong);
+}
+
+.agent-terminal-meta {
+  max-width: 74px;
 }
 
 .file-meta {

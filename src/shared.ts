@@ -34,9 +34,12 @@ export interface TerminalSize {
   cwd?: string;
 }
 
+export type TerminalKind = "shell" | "codex";
+
 export interface TerminalSession {
   id: string;
   cwd: string;
+  kind: TerminalKind;
   name: string;
 }
 
@@ -48,6 +51,12 @@ export interface TerminalDataPayload {
 export interface TerminalExitPayload {
   id: string;
   code?: number;
+}
+
+export interface TerminalStatePayload {
+  id: string;
+  cwd: string;
+  kind: TerminalKind;
 }
 
 export interface TerminalWriteRequest {
@@ -104,6 +113,7 @@ export interface NewideTerminalApi {
   dispose(id: string): Promise<boolean>;
   onData(callback: (payload: TerminalDataPayload) => void): Unsubscribe;
   onExit(callback: (payload: TerminalExitPayload) => void): Unsubscribe;
+  onState(callback: (payload: TerminalStatePayload) => void): Unsubscribe;
 }
 
 export interface NewideUpdateApi {
