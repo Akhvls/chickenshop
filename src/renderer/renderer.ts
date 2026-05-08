@@ -948,7 +948,7 @@ async function createTerminalSession(): Promise<void> {
 
   if (window.newideTerminal?.create) {
     try {
-      terminal = await window.newideTerminal.create();
+      terminal = await window.newideTerminal.create({ cwd: activeProject?.path });
     } catch (error: unknown) {
       const id = `terminal-${Date.now()}`;
       terminal = {

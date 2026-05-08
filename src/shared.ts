@@ -31,6 +31,7 @@ export interface WindowState {
 export interface TerminalSize {
   cols?: number;
   rows?: number;
+  cwd?: string;
 }
 
 export interface TerminalSession {

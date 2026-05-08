@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell as electronShell } from "electron";
-import type { Dirent } from "node:fs";
+import { statSync, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IPty } from "node-pty";
@@ -167,8 +167,53 @@ async function readProjectFile(filePath: string): Promise<ProjectFileContents> {
   };
 }
 
+function hasAsarPathSegment(filePath: string): boolean {
+  return path
+    .normalize(filePath)
+    .split(path.sep)
+    .some((segment) => segment.endsWith(".asar"));
+}
+
+function isTerminalSafeDirectory(directoryPath: string): boolean {
+  if (hasAsarPathSegment(directoryPath)) return false;
+
+  try {
+    return statSync(directoryPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function getPackagedProjectPath(): string {
+  for (const candidate of [app.getPath("desktop"), app.getPath("documents"), app.getPath("home")]) {
+    if (isTerminalSafeDirectory(candidate)) return candidate;
+  }
+
+  return app.getPath("home");
+}
+
 function getDefaultProjectPath(): string {
-  return path.resolve(__dirname, "..");
+  if (app.isPackaged) return getPackagedProjectPath();
+
+  const developmentProjectPath = path.resolve(__dirname, "..");
+  return isTerminalSafeDirectory(developmentProjectPath)
+    ? developmentProjectPath
+    : getPackagedProjectPath();
+}
+
+function getTerminalWorkingDirectory(candidatePath?: string): string {
+  const fallbackPaths = [candidatePath, getDefaultProjectPath(), getPackagedProjectPath()];
+
+  for (const candidate of fallbackPaths) {
+    if (!candidate) continue;
+
+    const resolvedPath = path.resolve(candidate);
+    if (isTerminalSafeDirectory(resolvedPath)) {
+      return resolvedPath;
+    }
+  }
+
+  return path.parse(app.getPath("home")).root;
 }
 
 function getIsoTimestamp(): string {
@@ -331,14 +376,14 @@ function disposeAllTerminals(): void {
   }
 }
 
-function createTerminal({ cols = 120, rows = 30 }: TerminalSize = {}): TerminalSession {
+function createTerminal({ cols = 120, rows = 30, cwd: requestedCwd }: TerminalSize = {}): TerminalSession {
   if (!pty) {
     throw new Error(
       `Real terminal backend failed to load.${ptyLoadError ? ` ${ptyLoadError.message}` : ""}`
     );
   }
 
-  const cwd = getDefaultProjectPath();
+  const cwd = getTerminalWorkingDirectory(requestedCwd);
   const id = `terminal-${++terminalCounter}`;
   const shell = process.env.SHELL || "/bin/zsh";
   const terminalProcess = pty.spawn(shell, [], {
