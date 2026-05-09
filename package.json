@@ -1,7 +1,7 @@
 {
   "name": "chickenshop",
   "version": "0.1.0",
-  "description": "A Codex-inspired Electron IDE shell.",
+  "description": "A Codex-inspired agentic development environment shell.",
   "main": "dist/main.js",
   "private": true,
   "scripts": {

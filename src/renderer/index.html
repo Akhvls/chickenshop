@@ -31,7 +31,7 @@
           </div>
         </div>
 
-        <div class="editor-tabs" role="tablist" aria-label="Open files" data-open-tabs></div>
+        <div class="editor-tabs" role="tablist" aria-label="Open sessions" data-open-tabs></div>
 
         <div class="linux-window-controls">
           <button type="button" aria-label="Minimize" data-window-action="minimize"></button>
@@ -42,36 +42,30 @@
 
       <aside class="sidebar">
         <nav class="primary-nav" aria-label="primary">
-          <button class="nav-item" type="button" aria-pressed="false" data-open-project>
-            <img class="ui-icon nav-icon" src="./assets/icons/nav-plus.svg" alt="" aria-hidden="true" />
-            <span>new project</span>
+          <button class="nav-item" type="button" data-new-chat>
+            <img class="ui-icon nav-icon" src="./assets/icons/compose-square.svg" alt="" aria-hidden="true" />
+            <span>new chat</span>
           </button>
-          <button class="nav-item" type="button">
-            <img class="ui-icon nav-icon" src="./assets/icons/nav-search.svg" alt="" aria-hidden="true" />
-            <span>search</span>
+          <button class="nav-item" type="button" data-new-terminal>
+            <img class="ui-icon nav-icon" src="./assets/icons/terminal-add-icon.png" alt="" aria-hidden="true" />
+            <span>new terminal</span>
           </button>
         </nav>
 
         <section class="sidebar-section terminal-section" aria-label="terminal">
           <div class="section-heading">
             <span>terminal</span>
-            <button class="tiny-button terminal-add" type="button" aria-label="add terminal">
-              <img class="ui-icon sidebar-action-icon terminal-add-icon" src="./assets/icons/terminal-add-icon.png" alt="" aria-hidden="true" />
-            </button>
           </div>
 
           <div class="terminal-list" data-terminal-list></div>
         </section>
 
-        <section class="sidebar-section project-section">
+        <section class="sidebar-section chats-section" aria-label="chats">
           <div class="section-heading">
-            <span>explorer</span>
-            <button class="tiny-button project-add" type="button" aria-label="new file">
-              <img class="ui-icon sidebar-action-icon project-add-icon" src="./assets/icons/generate-file-icon.svg" alt="" aria-hidden="true" />
-            </button>
+            <span>chats</span>
           </div>
 
-          <div class="project-tree" aria-label="explorer" data-project-tree></div>
+          <div class="chat-list" aria-label="chats" data-chat-list></div>
         </section>
 
         <div class="sidebar-bottom">
@@ -83,7 +77,7 @@
       </aside>
 
       <main class="workspace">
-        <section class="editor-shell" aria-label="Editor surface" data-viewer-host>
+        <section class="editor-shell" aria-label="Agentic development surface" data-viewer-host>
           <section class="home-pane active" aria-label="chickenshop home" data-home-pane>
             <div class="home-content">
               <img
@@ -106,18 +100,47 @@
             </div>
           </section>
 
-          <div class="viewer-pane text-viewer" data-viewer-panel="text">
-            <div class="text-editor" data-text-editor>
-              <div
-                class="editor-content"
-                contenteditable="plaintext-only"
-                role="textbox"
-                spellcheck="false"
-                aria-label="File contents"
-                data-editor
-              ></div>
+          <section
+            class="viewer-pane chat-viewer"
+            aria-label="chat session"
+            data-viewer-panel="chat"
+          >
+            <div class="chat-model-region">
+              <label class="sr-only" for="chat-model-select">Model</label>
+              <div class="model-select-wrap">
+                <span data-chat-model-label>5.5 Extra High</span>
+                <img class="ui-icon model-chevron" src="./assets/icons/chevron-down.png" alt="" aria-hidden="true" />
+                <select id="chat-model-select" class="model-select" data-chat-model>
+                  <option>5.5 Extra High</option>
+                  <option>5.5 High</option>
+                  <option>5.4 Medium</option>
+                </select>
+              </div>
             </div>
-          </div>
+
+            <div class="chat-start">
+              <h1 data-chat-title>What should we build in newide?</h1>
+              <form class="chat-composer" data-chat-composer>
+                <div class="chat-input-shell">
+                  <textarea
+                    class="chat-input"
+                    rows="1"
+                    placeholder="Ask newide anything"
+                    aria-label="Ask newide anything"
+                    data-chat-input
+                  ></textarea>
+                </div>
+                <div class="chat-composer-actions">
+                  <button class="composer-icon-button" type="button" aria-label="Add context">
+                    <img class="ui-icon" src="./assets/icons/plus.png" alt="" aria-hidden="true" />
+                  </button>
+                  <button class="composer-send-button" type="submit" aria-label="Send message">
+                    <img class="ui-icon" src="./assets/icons/forward.png" alt="" aria-hidden="true" />
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
 
           <section
             class="viewer-pane terminal-viewer terminal-screen"

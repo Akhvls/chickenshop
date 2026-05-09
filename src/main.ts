@@ -1,12 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, shell as electronShell } from "electron";
-import { mkdirSync, statSync, writeFileSync, type Dirent } from "node:fs";
+import { app, BrowserWindow, ipcMain, shell as electronShell } from "electron";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IPty } from "node-pty";
 import type {
-  ProjectDirectoryNode,
-  ProjectFileContents,
-  ProjectNode,
   TerminalDataPayload,
   TerminalExitPayload,
   TerminalKind,
@@ -18,15 +15,6 @@ import type {
   UpdateCheckResult,
   UpdateFeedInfo
 } from "./shared";
-
-interface ScanCounter {
-  count: number;
-}
-
-interface ScanOptions {
-  depth?: number;
-  counter: ScanCounter;
-}
 
 interface BackendTerminal {
   cwd: string;
@@ -63,122 +51,6 @@ try {
 
 const terminalProcesses = new Map<string, BackendTerminal>();
 
-const ignoredDirectories = new Set([
-  ".git",
-  ".next",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "out"
-]);
-
-const ignoredFiles = new Set([".DS_Store"]);
-
-function shouldIgnoreEntry(name: string, isDirectory: boolean): boolean {
-  if (isDirectory) return ignoredDirectories.has(name);
-  return ignoredFiles.has(name);
-}
-
-async function scanDirectory(
-  directoryPath: string,
-  { depth = 0, counter }: ScanOptions
-): Promise<ProjectNode[]> {
-  if (depth > 10 || counter.count > 1200) return [];
-
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(directoryPath, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  entries = entries
-    .filter((entry) => !shouldIgnoreEntry(entry.name, entry.isDirectory()))
-    .sort((a, b) => {
-      if (a.isDirectory() !== b.isDirectory()) {
-        return a.isDirectory() ? -1 : 1;
-      }
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-    });
-
-  const children: ProjectNode[] = [];
-
-  for (const entry of entries) {
-    if (counter.count > 1200) break;
-    const entryPath = path.join(directoryPath, entry.name);
-
-    if (entry.isSymbolicLink()) continue;
-
-    if (entry.isDirectory()) {
-      counter.count += 1;
-      children.push({
-        type: "directory",
-        name: entry.name,
-        path: entryPath,
-        children: await scanDirectory(entryPath, {
-          depth: depth + 1,
-          counter
-        })
-      });
-      continue;
-    }
-
-    if (entry.isFile()) {
-      counter.count += 1;
-      children.push({
-        type: "file",
-        name: entry.name,
-        path: entryPath
-      });
-    }
-  }
-
-  return children;
-}
-
-async function buildProject(directoryPath: string): Promise<ProjectDirectoryNode> {
-  const rootPath = path.resolve(directoryPath);
-  return {
-    type: "directory",
-    name: path.basename(rootPath) || rootPath,
-    path: rootPath,
-    children: await scanDirectory(rootPath, {
-      counter: { count: 0 }
-    })
-  };
-}
-
-async function readProjectFile(filePath: string): Promise<ProjectFileContents> {
-  const resolvedPath = path.resolve(filePath);
-  const stat = await fs.stat(resolvedPath);
-
-  if (!stat.isFile()) {
-    throw new Error("Selected path is not a file.");
-  }
-
-  if (stat.size > 2 * 1024 * 1024) {
-    return {
-      name: path.basename(resolvedPath),
-      path: resolvedPath,
-      content: "This file is larger than 2 MB, so it was not loaded into the preview editor.",
-      readonly: true
-    };
-  }
-
-  const buffer = await fs.readFile(resolvedPath);
-  const hasBinaryByte = buffer.subarray(0, 4096).includes(0);
-
-  return {
-    name: path.basename(resolvedPath),
-    path: resolvedPath,
-    content: hasBinaryByte
-      ? "Binary file preview is not supported yet."
-      : buffer.toString("utf8"),
-    readonly: hasBinaryByte
-  };
-}
-
 function hasAsarPathSegment(filePath: string): boolean {
   return path
     .normalize(filePath)
@@ -196,7 +68,7 @@ function isTerminalSafeDirectory(directoryPath: string): boolean {
   }
 }
 
-function getPackagedProjectPath(): string {
+function getPackagedTerminalPath(): string {
   for (const candidate of [app.getPath("desktop"), app.getPath("documents"), app.getPath("home")]) {
     if (isTerminalSafeDirectory(candidate)) return candidate;
   }
@@ -204,17 +76,17 @@ function getPackagedProjectPath(): string {
   return app.getPath("home");
 }
 
-function getDefaultProjectPath(): string {
-  if (app.isPackaged) return getPackagedProjectPath();
+function getDefaultTerminalPath(): string {
+  if (app.isPackaged) return getPackagedTerminalPath();
 
-  const developmentProjectPath = path.resolve(__dirname, "..");
-  return isTerminalSafeDirectory(developmentProjectPath)
-    ? developmentProjectPath
-    : getPackagedProjectPath();
+  const developmentWorkspacePath = path.resolve(__dirname, "..");
+  return isTerminalSafeDirectory(developmentWorkspacePath)
+    ? developmentWorkspacePath
+    : getPackagedTerminalPath();
 }
 
 function getTerminalWorkingDirectory(candidatePath?: string): string {
-  const fallbackPaths = [candidatePath, getDefaultProjectPath(), getPackagedProjectPath()];
+  const fallbackPaths = [candidatePath, getDefaultTerminalPath(), getPackagedTerminalPath()];
 
   for (const candidate of fallbackPaths) {
     if (!candidate) continue;
@@ -910,24 +782,6 @@ ipcMain.handle("window:close", () => {
 ipcMain.handle("window:get-state", () => ({
   expanded: mainWindow?.isFullScreen() ?? false
 }));
-
-ipcMain.handle("project:get-default", () => buildProject(getDefaultProjectPath()));
-
-ipcMain.handle("project:open-folder", async () => {
-  if (!mainWindow) return null;
-
-  const result = await dialog.showOpenDialog(mainWindow, {
-    buttonLabel: "Open Project",
-    message: "Choose a project folder",
-    properties: ["openDirectory"]
-  });
-  mainWindow.webContents.send("project:folder-picker-closed");
-
-  if (result.canceled || !result.filePaths[0]) return null;
-  return buildProject(result.filePaths[0]);
-});
-
-ipcMain.handle("project:read-file", (_event, filePath: string) => readProjectFile(filePath));
 
 ipcMain.handle("terminal:create", (_event, size?: TerminalSize) => createTerminal(size));
 

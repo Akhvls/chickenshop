@@ -1,7 +1,3 @@
-type ProjectDirectoryNode = import("../shared").ProjectDirectoryNode;
-type ProjectFileNode = import("../shared").ProjectFileNode;
-type ProjectNode = import("../shared").ProjectNode;
-type NewideProjectApi = import("../shared").NewideProjectApi;
 type NewideTerminalApi = import("../shared").NewideTerminalApi;
 type NewideUpdateApi = import("../shared").NewideUpdateApi;
 type NewideWindowApi = import("../shared").NewideWindowApi;
@@ -20,42 +16,14 @@ interface Window {
     FitAddon: FitAddonConstructor;
   };
   Terminal?: XtermConstructor;
-  newideProject?: NewideProjectApi;
   newideTerminal?: NewideTerminalApi;
   newideUpdate?: NewideUpdateApi;
   newideWindow?: NewideWindowApi;
 }
 
-type ViewerType = "text";
-type TabType = "file" | "terminal";
+type SessionType = "chat" | "terminal";
 type TerminalRenameTarget = "sidebar" | "tab";
 type WindowAction = "minimize" | "maximize" | "close";
-
-interface EditableFile {
-  name: string;
-  path: string;
-  viewer: ViewerType;
-  status: string;
-  content: string;
-  readonly?: boolean;
-}
-
-interface OpenTab {
-  type: TabType;
-  id: string;
-}
-
-interface TabDetails {
-  name: string;
-  title: string;
-  closeLabel: string;
-}
-
-interface Viewer {
-  read(file?: EditableFile): void;
-  render(file: EditableFile): void;
-  clear(): void;
-}
 
 interface TerminalFrontend {
   xterm: XtermTerminal;
@@ -70,6 +38,18 @@ interface TerminalFrontend {
 interface RendererTerminal extends TerminalSession, TerminalFrontend {
   baseName: string;
   exited: boolean;
+}
+
+interface ChatSession {
+  id: string;
+  model: string;
+  name: string;
+  prompt: string;
+}
+
+interface OpenTab {
+  type: SessionType;
+  id: string;
 }
 
 function requireElement<T extends Element>(selector: string): T {
@@ -92,92 +72,58 @@ function getErrorMessage(error: unknown): string {
 }
 
 const iconBase = "./assets/icons";
-const fileTypeIconBase = "./assets/file-types";
 
-const fileTypeIcons: Record<string, string> = {
-  md: "md",
-  markdown: "md",
-  txt: "txt",
-  text: "txt"
-};
+function icon(name: string, className = "ui-icon"): HTMLImageElement {
+  const image = document.createElement("img");
+  const sourceName = /\.[a-z0-9]+$/i.test(name) ? name : `${name}.png`;
+  image.className = className;
+  image.src = `${iconBase}/${sourceName}`;
+  image.alt = "";
+  image.setAttribute("aria-hidden", "true");
+  return image;
+}
 
-const fallbackProject: ProjectDirectoryNode = {
-  type: "directory",
-  name: "newide",
-  path: "demo:/newide",
-  children: [
-    {
-      type: "file",
-      name: "dev-notes.md",
-      path: "demo:/newide/dev-notes.md",
-      status: "6m",
-      content: `# Dev startup notes
+function terminalKindIcon(
+  kind: TerminalKind | undefined,
+  className = "terminal-icon"
+): HTMLImageElement {
+  return icon(kind === "codex" ? "openai-logo.svg" : "terminal-icon", `ui-icon ${className}`);
+}
 
-Electron is installed locally and the dev command runs the desktop app directly.
+function chatIcon(className = "chat-icon"): HTMLImageElement {
+  return icon("chat-icon", `ui-icon ${className}`);
+}
 
-npm run dev
-
-The renderer is loaded from:
-dist/renderer/index.html
-
-This surface should behave like a quiet text editor: open a file, read it, edit it, and keep the surrounding chrome out of the way.`
-    },
-    {
-      type: "file",
-      name: "scratch.txt",
-      path: "demo:/newide/scratch.txt",
-      status: "Now",
-      content: `Scratch
-
-- Keep the app text-first.
-- Sidebar: new project, search, explorer.
-- Main pane: editable file content, not a chat transcript.
-- Later: wire this to real file open/save actions.`
-    },
-    {
-      type: "file",
-      name: "roadmap.md",
-      path: "demo:/newide/roadmap.md",
-      status: "4d",
-      content: `# Roadmap
-
-1. Text editor shell
-2. Project file tree
-3. Real open/save support
-4. search across notes
-5. Optional agent actions once the editor foundation feels right`
-    }
-  ]
-};
-
-let activeProject: ProjectDirectoryNode | undefined;
-let files: Record<string, EditableFile> = {};
+let chats: Record<string, ChatSession> = {};
 let terminals: Record<string, RendererTerminal> = {};
-let activeFileId: string | undefined;
+let activeChatId: string | undefined;
 let activeTerminalId: string | undefined;
 let openTabs: OpenTab[] = [];
-let expandedFolders = new Set<string>();
-let isLoadingFile = false;
 let editingTerminalId: string | undefined;
 let editingTerminalRenameTarget: TerminalRenameTarget | undefined;
 let lastTerminalRowClickId: string | undefined;
 let lastTerminalRowClickAt = 0;
-let isProjectPickerOpen = false;
+let chatCounter = 0;
 
 const tabsRoot = requireElement<HTMLDivElement>("[data-open-tabs]");
 const homePane = requireElement<HTMLElement>("[data-home-pane]");
-const textEditor = requireElement<HTMLElement>("[data-text-editor]");
-const editor = requireElement<HTMLElement>("[data-editor]");
+const chatListRoot = requireElement<HTMLElement>("[data-chat-list]");
+const chatInput = requireElement<HTMLTextAreaElement>("[data-chat-input]");
+const chatModelSelect = requireElement<HTMLSelectElement>("[data-chat-model]");
+const chatModelLabel = requireElement<HTMLElement>("[data-chat-model-label]");
+const chatComposer = requireElement<HTMLFormElement>("[data-chat-composer]");
 const terminalListRoot = requireElement<HTMLElement>("[data-terminal-list]");
 const terminalScreen = requireElement<HTMLElement>("[data-terminal-screen]");
-const projectTreeRoot = requireElement<HTMLElement>("[data-project-tree]");
 const updateBanner = requireElement<HTMLElement>("[data-update-banner]");
 const updateTitle = requireElement<HTMLElement>("[data-update-title]");
 const updateNotes = requireElement<HTMLElement>("[data-update-notes]");
 const updateDismissButton = requireElement<HTMLButtonElement>("[data-update-dismiss]");
 const updateDownloadButton = requireElement<HTMLButtonElement>("[data-update-download]");
-const openProjectButtons = [
-  ...document.querySelectorAll<HTMLButtonElement>("[data-open-project]")
+const newChatButtons = [
+  ...document.querySelectorAll<HTMLButtonElement>("[data-new-chat]")
+];
+const newTerminalButtons = [
+  ...document.querySelectorAll<HTMLButtonElement>("[data-new-terminal]")
 ];
 const viewerPanels = document.querySelectorAll<HTMLElement>("[data-viewer-panel]");
 const XtermTerminal = window.Terminal;
@@ -189,6 +135,12 @@ let updateDownloadUrl: string | undefined;
 const pendingTerminalData: Record<string, string> = {};
 const updateCheckIntervalMs = 6 * 60 * 60 * 1000;
 const dismissedUpdateStorageKey = "chickenshop:dismissed-update-version";
+const chatInputMinHeight = 24;
+const chatInputMultilineMinHeight = chatInputMinHeight * 2;
+const chatInputMaxHeight = 168;
+const chatCompactButtonColumnWidth = 32;
+const chatCompactColumnGap = 4;
+let chatInputMeasure: HTMLTextAreaElement | undefined;
 
 setTimeout(() => {
   terminalCreationReady = true;
@@ -210,67 +162,7 @@ function isWindowAction(action: string | null): action is WindowAction {
   return action === "minimize" || action === "maximize" || action === "close";
 }
 
-const viewers: Record<ViewerType, Viewer> = {
-  text: {
-    read(file) {
-      if (!file || file.readonly) return;
-      file.content = editor.textContent ?? "";
-    },
-    render(file) {
-      editor.textContent = file.content ?? "";
-      editor.contentEditable = file.readonly ? "false" : "plaintext-only";
-      updateLineNumbers();
-    },
-    clear() {
-      editor.textContent = "";
-      editor.contentEditable = "plaintext-only";
-      updateLineNumbers();
-    }
-  }
-};
-
-function getViewer(file?: EditableFile): Viewer {
-  return file ? viewers[file.viewer] : viewers.text;
-}
-
-function icon(name: string, className = "ui-icon"): HTMLImageElement {
-  const image = document.createElement("img");
-  image.className = className;
-  image.src = `${iconBase}/${name}.png`;
-  image.alt = "";
-  image.setAttribute("aria-hidden", "true");
-  return image;
-}
-
-function getFileExtension(fileName = ""): string {
-  const extension = fileName.split(".").pop()?.toLowerCase();
-  return !extension || extension === fileName ? "" : extension;
-}
-
-function getFileTypeIconName(fileName: string): string | undefined {
-  return fileTypeIcons[getFileExtension(fileName)];
-}
-
-function fileTypeIcon(fileName: string, className = "tab-file-icon"): HTMLImageElement {
-  const image = document.createElement("img");
-  const iconName = getFileTypeIconName(fileName);
-  image.className = className;
-  image.src = iconName
-    ? `${fileTypeIconBase}/${iconName}.png`
-    : `${iconBase}/file.png`;
-  image.alt = "";
-  image.setAttribute("aria-hidden", "true");
-  return image;
-}
-
-function terminalKindIcon(
-  kind: TerminalKind | undefined,
-  className = "terminal-icon"
-): HTMLImageElement {
-  return icon(kind === "codex" ? "codex-agent-icon" : "terminal-icon", `ui-icon ${className}`);
-}
-
-function showViewer(viewerType: ViewerType | "terminal"): void {
+function showViewer(viewerType: "chat" | "terminal"): void {
   homePane.classList.remove("active");
   viewerPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.viewerPanel === viewerType);
@@ -284,66 +176,20 @@ function showHome(): void {
   homePane.classList.add("active");
 }
 
-function saveActiveFile(): void {
-  if (!activeFileId) return;
-  const file = files[activeFileId];
-  getViewer(file).read(file);
-}
-
-function updateLineNumbers(): void {
-  const lineCount = Math.max((editor.textContent ?? "").split("\n").length, 1);
-  textEditor
-    .querySelectorAll("[data-line-number]")
-    .forEach((lineNumber) => lineNumber.remove());
-
-  const lineFragment = document.createDocumentFragment();
-  Array.from({ length: lineCount }, (_item, index) => {
-    const lineNumber = document.createElement("span");
-    lineNumber.className = "editor-line-number";
-    lineNumber.dataset.lineNumber = "";
-    lineNumber.setAttribute("aria-hidden", "true");
-    lineNumber.style.setProperty("--line-index", String(index));
-    lineNumber.textContent = String(index + 1);
-    lineFragment.append(lineNumber);
-  });
-
-  textEditor.insertBefore(lineFragment, editor);
-}
-
-function getTabKey(type: TabType, id: string): string {
+function getTabKey(type: SessionType, id: string): string {
   return `${type}:${id}`;
 }
 
 function getActiveTabKey(): string | undefined {
+  if (activeChatId) return getTabKey("chat", activeChatId);
   if (activeTerminalId) return getTabKey("terminal", activeTerminalId);
-  if (activeFileId) return getTabKey("file", activeFileId);
   return undefined;
 }
 
-function ensureOpenTab(type: TabType, id: string): void {
+function ensureOpenTab(type: SessionType, id: string): void {
   const key = getTabKey(type, id);
   if (openTabs.some((tab) => getTabKey(tab.type, tab.id) === key)) return;
   openTabs.push({ type, id });
-}
-
-function getTabDetails(tab: OpenTab): TabDetails | undefined {
-  if (tab.type === "file") {
-    const file = files[tab.id];
-    if (!file) return undefined;
-    return {
-      name: file.name,
-      title: file.path,
-      closeLabel: `Close ${file.name}`
-    };
-  }
-
-  const terminal = terminals[tab.id];
-  if (!terminal) return undefined;
-  return {
-    name: terminal.name,
-    title: terminal.cwd,
-    closeLabel: `close ${terminal.name}`
-  };
 }
 
 function renderTerminalRenameInput(
@@ -440,22 +286,22 @@ function cancelTerminalRename(): void {
 
 function activateOpenTab(tab?: OpenTab): void {
   if (!tab) {
-    activeFileId = undefined;
+    activeChatId = undefined;
     activeTerminalId = undefined;
-    viewers.text.clear();
+    renderTerminalView();
     showHome();
     renderOpenTabs();
-    renderSidebarStates();
+    renderChats();
     renderTerminals();
     return;
   }
 
-  if (tab.type === "terminal") {
-    setActiveTerminal(tab.id);
+  if (tab.type === "chat") {
+    setActiveChat(tab.id);
     return;
   }
 
-  setActiveFile(tab.id, { force: true });
+  setActiveTerminal(tab.id);
 }
 
 function renderOpenTabs(): void {
@@ -463,35 +309,57 @@ function renderOpenTabs(): void {
 
   tabsRoot.replaceChildren(
     ...openTabs.flatMap((openTab): HTMLDivElement[] => {
-      const details = getTabDetails(openTab);
-      if (!details) return [];
+      const isChat = openTab.type === "chat";
+      const chat = isChat ? chats[openTab.id] : undefined;
+      const terminal = !isChat ? terminals[openTab.id] : undefined;
+      const session = chat ?? terminal;
+      if (!session) return [];
 
       const tab = document.createElement("div");
       const tabKey = getTabKey(openTab.type, openTab.id);
+      const isActive = tabKey === activeKey;
       tab.className = "workspace-tab";
-      tab.classList.toggle("active", tabKey === activeKey);
-      tab.classList.toggle("terminal-tab", openTab.type === "terminal");
+      tab.classList.toggle("chat-tab", isChat);
+      tab.classList.toggle("terminal-tab", !isChat);
+      tab.classList.toggle("active", isActive);
       tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-selected", String(tabKey === activeKey));
+      tab.setAttribute("aria-selected", String(isActive));
 
       const select = document.createElement("div");
       select.className = "tab-select";
       select.setAttribute("role", "button");
       select.tabIndex = 0;
-      select.title = details.title;
+      select.title = isChat ? chat?.name ?? "" : terminal?.cwd ?? "";
+      select.append(isChat
+        ? chatIcon("tab-chat-icon")
+        : terminalKindIcon(terminal?.kind, "tab-terminal-icon"));
 
-      if (openTab.type === "terminal") {
-        select.append(terminalKindIcon(terminals[openTab.id]?.kind, "tab-terminal-icon"));
+      const isRenaming =
+        terminal &&
+        editingTerminalId === terminal.id &&
+        editingTerminalRenameTarget === "tab";
+
+      if (isRenaming) {
+        select.append(
+          renderTerminalRenameInput(
+            terminal,
+            "tab",
+            "terminal-row-rename"
+          )
+        );
       } else {
-        select.append(fileTypeIcon(details.name));
+        const label = document.createElement("span");
+        label.className = "tab-label";
+        label.textContent = session.name;
+        select.append(label);
       }
 
-      const label = document.createElement("span");
-      label.className = "tab-label";
-      label.textContent = details.name;
-      select.append(label);
-
       select.addEventListener("click", () => activateOpenTab(openTab));
+      select.addEventListener("dblclick", (event) => {
+        if (isChat) return;
+        event.preventDefault();
+        beginTerminalRename(openTab.id, "tab");
+      });
       select.addEventListener("keydown", (event) => {
         const isActivationKey = event.key === "Enter" || event.key === " ";
         if (!isActivationKey) return;
@@ -502,42 +370,21 @@ function renderOpenTabs(): void {
       const close = document.createElement("button");
       close.className = "tab-close";
       close.type = "button";
-      close.setAttribute("aria-label", details.closeLabel);
+      close.setAttribute("aria-label", `close ${session.name}`);
       close.append(icon("close", "ui-icon tab-close-icon"));
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (openTab.type === "terminal") {
-          closeTerminalTab(openTab.id);
+        if (isChat) {
+          closeChatTab(openTab.id);
           return;
         }
-        closeFileTab(openTab.id);
+        closeTerminalTab(openTab.id);
       });
 
       tab.append(select, close);
       return [tab];
     })
   );
-}
-
-function renderSidebarStates(): void {
-  document.querySelectorAll<HTMLElement>("[data-file-path]").forEach((button) => {
-    const isActive = button.dataset.filePath === activeFileId;
-    button.classList.toggle("selected", isActive);
-    button.classList.toggle("is-active", isActive);
-  });
-
-  document.querySelectorAll<HTMLElement>("[data-agent-terminal-id]").forEach((button) => {
-    const isActive = button.dataset.agentTerminalId === activeTerminalId;
-    button.classList.toggle("selected", isActive);
-    button.classList.toggle("is-active", isActive);
-  });
-}
-
-function setOpenProjectSelected(selected: boolean): void {
-  openProjectButtons.forEach((button) => {
-    button.classList.toggle("selected", selected);
-    button.setAttribute("aria-pressed", String(selected));
-  });
 }
 
 function getDismissedUpdateVersion(): string | undefined {
@@ -600,6 +447,35 @@ function scheduleUpdateChecks(): void {
   }, updateCheckIntervalMs);
 }
 
+function renderChats(): void {
+  chatListRoot.replaceChildren(
+    ...Object.values(chats).map((chat) => {
+      const row = document.createElement("div");
+      row.className = "chat-row";
+      row.classList.toggle("selected", chat.id === activeChatId);
+      row.setAttribute("role", "button");
+      row.tabIndex = 0;
+      row.dataset.chatId = chat.id;
+      row.append(chatIcon());
+
+      const title = document.createElement("span");
+      title.className = "chat-row-title";
+      title.textContent = chat.name;
+      row.append(title);
+
+      const close = document.createElement("button");
+      close.className = "session-row-close";
+      close.type = "button";
+      close.dataset.chatClose = chat.id;
+      close.setAttribute("aria-label", `close ${chat.name}`);
+      close.append(icon("close", "ui-icon session-row-close-icon"));
+      row.append(close);
+
+      return row;
+    })
+  );
+}
+
 function renderTerminals(): void {
   terminalListRoot.replaceChildren(
     ...Object.values(terminals).map((terminal) => {
@@ -631,11 +507,11 @@ function renderTerminals(): void {
       }
 
       const close = document.createElement("button");
-      close.className = "terminal-row-close";
+      close.className = "session-row-close terminal-row-close";
       close.type = "button";
       close.dataset.terminalClose = terminal.id;
       close.setAttribute("aria-label", `close ${terminal.name}`);
-      close.append(icon("close", "ui-icon terminal-row-close-icon"));
+      close.append(icon("close", "ui-icon session-row-close-icon terminal-row-close-icon"));
       row.append(close);
 
       return row;
@@ -652,271 +528,8 @@ function setSidebarCollapsed(collapsed: boolean): void {
 
 function toggleSidebar(): void {
   setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
-}
-
-function toggleFolder(folderPath: string): void {
-  if (expandedFolders.has(folderPath)) {
-    expandedFolders.delete(folderPath);
-  } else {
-    expandedFolders.add(folderPath);
-  }
-  renderProjectTree();
-}
-
-function isTextCandidate(fileName: string): boolean {
-  return /\.(css|html|js|json|md|mjs|cjs|txt|ts|tsx|jsx|yml|yaml)$/i.test(fileName);
-}
-
-function findFileNode(
-  node: ProjectNode | undefined,
-  predicate: (node: ProjectFileNode) => boolean
-): ProjectFileNode | undefined {
-  if (!node) return undefined;
-  if (node.type === "file") return predicate(node) ? node : undefined;
-
-  for (const child of node.children) {
-    const match = findFileNode(child, predicate);
-    if (match) return match;
-  }
-
-  return undefined;
-}
-
-function findPreferredFile(project: ProjectDirectoryNode): ProjectFileNode | undefined {
-  return (
-    findFileNode(
-      project,
-      (node) => node.path.endsWith("src/renderer/index.html")
-    ) ??
-    findFileNode(project, (node) => isTextCandidate(node.name))
-  );
-}
-
-function expandParentsForPath(
-  targetPath: string,
-  node: ProjectNode | undefined = activeProject,
-  parents: string[] = []
-): boolean {
-  if (!node) return false;
-  if (node.path === targetPath) {
-    parents.forEach((folderPath) => expandedFolders.add(folderPath));
-    return true;
-  }
-
-  if (node.type !== "directory") return false;
-
-  for (const child of node.children) {
-    if (expandParentsForPath(targetPath, child, [...parents, node.path])) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function normalizeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[\\/]+$/, "");
-}
-
-function isSameProjectPath(leftPath: string, rightPath: string): boolean {
-  return normalizeProjectPath(leftPath) === normalizeProjectPath(rightPath);
-}
-
-function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
-  const normalizedTarget = normalizeProjectPath(targetPath);
-  const normalizedDirectory = normalizeProjectPath(directoryPath);
-  return (
-    normalizedTarget === normalizedDirectory ||
-    normalizedTarget.startsWith(`${normalizedDirectory}/`)
-  );
-}
-
-function findContainingDirectoryPath(
-  targetPath: string,
-  node: ProjectNode | undefined = activeProject
-): string | undefined {
-  if (!node || node.type !== "directory" || !isPathInsideDirectory(targetPath, node.path)) {
-    return undefined;
-  }
-
-  for (const child of node.children) {
-    if (child.type !== "directory") continue;
-
-    const match = findContainingDirectoryPath(targetPath, child);
-    if (match) return match;
-  }
-
-  return node.path;
-}
-
-function expandDirectoriesForPath(
-  targetPath: string,
-  node: ProjectNode | undefined = activeProject
-): boolean {
-  if (!node || node.type !== "directory" || !isPathInsideDirectory(targetPath, node.path)) {
-    return false;
-  }
-
-  expandedFolders.add(node.path);
-
-  for (const child of node.children) {
-    if (child.type === "directory" && expandDirectoriesForPath(targetPath, child)) {
-      return true;
-    }
-  }
-
-  return isSameProjectPath(targetPath, node.path);
-}
-
-function registerFallbackFiles(node: ProjectNode | undefined): void {
-  if (!node) return;
-  if (node.type === "file") {
-    files[node.path] = {
-      name: node.name,
-      path: node.path,
-      viewer: "text",
-      status: node.status ?? "",
-      content: node.content ?? ""
-    };
-    return;
-  }
-
-  node.children.forEach(registerFallbackFiles);
-}
-
-function getCodexTerminalsForDirectory(directoryPath: string): RendererTerminal[] {
-  return Object.values(terminals)
-    .filter((terminal) => {
-      if (terminal.kind !== "codex" || terminal.exited) return false;
-      return findContainingDirectoryPath(terminal.cwd) === directoryPath;
-    })
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function appendCodexTerminalRows(
-  list: HTMLDivElement,
-  directoryPath: string,
-  depth: number
-): void {
-  getCodexTerminalsForDirectory(directoryPath).forEach((terminal) => {
-    const row = document.createElement("button");
-    row.className = "tree-item agent-terminal-row";
-    row.classList.toggle("selected", terminal.id === activeTerminalId);
-    row.classList.toggle("is-active", terminal.id === activeTerminalId);
-    row.type = "button";
-    row.dataset.agentTerminalId = terminal.id;
-    row.style.setProperty("--tree-depth", String(depth));
-    row.title = terminal.cwd;
-
-    const spacer = document.createElement("span");
-    spacer.className = "tree-chevron tree-chevron-spacer";
-    spacer.setAttribute("aria-hidden", "true");
-    row.append(spacer);
-    row.append(terminalKindIcon("codex", "tree-icon agent-terminal-icon"));
-
-    const title = document.createElement("span");
-    title.className = "file-title agent-terminal-title";
-    title.textContent = "codex";
-    row.append(title);
-
-    const meta = document.createElement("span");
-    meta.className = "file-meta agent-terminal-meta";
-    meta.textContent = terminal.name;
-    row.append(meta);
-
-    list.append(row);
-  });
-}
-
-function renderProjectTree(): void {
-  projectTreeRoot.replaceChildren();
-
-  if (!activeProject) return;
-
-  const rootRow = document.createElement("div");
-  rootRow.className = "project-row";
-
-  const rootButton = document.createElement("button");
-  const isRootExpanded = expandedFolders.has(activeProject.path);
-  rootButton.className = "tree-item folder-row project-main";
-  rootButton.type = "button";
-  rootButton.dataset.folderPath = activeProject.path;
-  rootButton.style.setProperty("--tree-depth", "0");
-  rootButton.setAttribute("aria-expanded", String(isRootExpanded));
-  rootButton.append(icon(isRootExpanded ? "chevron-down" : "chevron-right", "ui-icon tree-chevron"));
-  rootButton.append(icon("folder", "ui-icon tree-icon"));
-
-  const rootLabel = document.createElement("span");
-  rootLabel.textContent = activeProject.name;
-  rootButton.append(rootLabel);
-  rootRow.append(rootButton);
-  projectTreeRoot.append(rootRow);
-
-  const children = renderTreeChildren(activeProject.children, 1, activeProject.path);
-  children.hidden = !expandedFolders.has(activeProject.path);
-  projectTreeRoot.append(children);
-}
-
-function renderTreeChildren(
-  nodes: ProjectNode[],
-  depth: number,
-  directoryPath: string
-): HTMLDivElement {
-  const list = document.createElement("div");
-  list.className = "file-list tree-children";
-  appendCodexTerminalRows(list, directoryPath, depth);
-
-  nodes.forEach((node) => {
-    if (node.type === "directory") {
-      const isExpanded = expandedFolders.has(node.path);
-      const row = document.createElement("button");
-      row.className = "tree-item folder-row";
-      row.type = "button";
-      row.dataset.folderPath = node.path;
-      row.style.setProperty("--tree-depth", String(depth));
-      row.setAttribute("aria-expanded", String(isExpanded));
-      row.append(icon(isExpanded ? "chevron-down" : "chevron-right", "ui-icon tree-chevron"));
-      row.append(icon("folder", "ui-icon tree-icon"));
-
-      const label = document.createElement("span");
-      label.textContent = node.name;
-      row.append(label);
-      list.append(row);
-
-      const childList = renderTreeChildren(node.children, depth + 1, node.path);
-      childList.hidden = !isExpanded;
-      list.append(childList);
-      return;
-    }
-
-    const row = document.createElement("button");
-    row.className = "tree-item file-row";
-    row.type = "button";
-    row.dataset.filePath = node.path;
-    row.style.setProperty("--tree-depth", String(depth));
-
-    const spacer = document.createElement("span");
-    spacer.className = "tree-chevron tree-chevron-spacer";
-    spacer.setAttribute("aria-hidden", "true");
-    row.append(spacer);
-    row.append(icon("file", "ui-icon tree-icon"));
-
-    const title = document.createElement("span");
-    title.className = "file-title";
-    title.textContent = node.name;
-    row.append(title);
-
-    if (node.status) {
-      const meta = document.createElement("span");
-      meta.className = "file-meta";
-      meta.textContent = node.status;
-      row.append(meta);
-    }
-
-    list.append(row);
-  });
-
-  return list;
+  resizeChatInput();
+  window.setTimeout(resizeChatInput, 220);
 }
 
 function appendTerminalOutput(terminalId: string, text: string): void {
@@ -950,7 +563,7 @@ function createTerminalFrontend(terminalId: string): TerminalFrontend {
     macOptionIsMeta: true,
     scrollback: 10000,
     theme: {
-      background: "#fff7f0",
+      background: "#fbf1e8",
       foreground: "#263c55",
       cursor: "#213650",
       selectionBackground: "#cbd8e5",
@@ -1034,25 +647,165 @@ function renderTerminalView(): void {
   });
 }
 
+function renderChatView(): void {
+  const chat = activeChatId ? chats[activeChatId] : undefined;
+  if (!chat) {
+    chatInput.value = "";
+    chatModelSelect.value = chatModelSelect.options[0]?.value ?? "";
+    chatModelLabel.textContent = chatModelSelect.value;
+    resizeChatInput();
+    return;
+  }
+
+  chat.prompt = normalizeChatPrompt(chat.prompt);
+  chatInput.value = chat.prompt;
+  chatModelSelect.value = chat.model;
+  chatModelLabel.textContent = chat.model;
+  resizeChatInput();
+}
+
+function normalizeChatPrompt(value: string): string {
+  const normalized = value.replace(/\r\n?/g, "\n").replace(/\s*\n+\s*/g, " ");
+  return normalized.trim().length === 0 ? "" : normalized;
+}
+
+function getChatInputMeasure(): HTMLTextAreaElement {
+  if (chatInputMeasure) return chatInputMeasure;
+
+  chatInputMeasure = document.createElement("textarea");
+  chatInputMeasure.rows = 1;
+  chatInputMeasure.tabIndex = -1;
+  chatInputMeasure.setAttribute("aria-hidden", "true");
+  chatInputMeasure.style.position = "fixed";
+  chatInputMeasure.style.left = "-10000px";
+  chatInputMeasure.style.top = "0";
+  chatInputMeasure.style.height = "0";
+  chatInputMeasure.style.minHeight = "0";
+  chatInputMeasure.style.maxHeight = "none";
+  chatInputMeasure.style.overflow = "hidden";
+  chatInputMeasure.style.padding = "0";
+  chatInputMeasure.style.border = "0";
+  chatInputMeasure.style.visibility = "hidden";
+  chatInputMeasure.style.pointerEvents = "none";
+  chatInputMeasure.style.resize = "none";
+  chatInputMeasure.style.whiteSpace = "pre-wrap";
+  chatInputMeasure.style.wordBreak = "normal";
+  chatInputMeasure.style.overflowWrap = "break-word";
+  document.body.append(chatInputMeasure);
+
+  return chatInputMeasure;
+}
+
+function getCompactChatInputWidth(): number {
+  const composerStyle = getComputedStyle(chatComposer);
+  const paddingX =
+    (parseFloat(composerStyle.paddingLeft) || 0) +
+    (parseFloat(composerStyle.paddingRight) || 0);
+  const contentWidth = chatComposer.clientWidth - paddingX;
+  const reservedControlWidth =
+    chatCompactButtonColumnWidth * 2 + chatCompactColumnGap * 2;
+  const compactWidth = contentWidth - reservedControlWidth;
+  const fallbackWidth = chatInput.getBoundingClientRect().width;
+
+  return Math.max(0, Math.round(compactWidth || fallbackWidth));
+}
+
+function measureChatInputHeightForCompactRow(): number {
+  const measureInput = getChatInputMeasure();
+  const inputStyle = getComputedStyle(chatInput);
+  const compactWidth = getCompactChatInputWidth();
+
+  measureInput.style.boxSizing = inputStyle.boxSizing;
+  measureInput.style.font = inputStyle.font;
+  measureInput.style.letterSpacing = inputStyle.letterSpacing;
+  measureInput.style.lineHeight = inputStyle.lineHeight;
+  measureInput.style.width = `${compactWidth}px`;
+  measureInput.value = chatInput.value || " ";
+  measureInput.style.height = "0";
+
+  return measureInput.scrollHeight;
+}
+
+function shouldUseMultilineChatInput(): boolean {
+  if (!chatInput.value) return false;
+
+  return measureChatInputHeightForCompactRow() > chatInputMinHeight + 1;
+}
+
+function resizeChatInput(): void {
+  const shouldUseMultiline = shouldUseMultilineChatInput();
+  chatInput.wrap = "soft";
+  chatInput.style.minHeight = "0";
+  chatInput.style.height = "0";
+  chatComposer.classList.toggle("is-multiline", shouldUseMultiline);
+
+  chatInput.style.height = "0";
+  const contentHeight = chatInput.scrollHeight;
+  const nextHeight = shouldUseMultiline
+    ? Math.min(
+        Math.max(contentHeight, chatInputMultilineMinHeight),
+        chatInputMaxHeight
+      )
+    : chatInputMinHeight;
+  chatInput.style.overflowY =
+    shouldUseMultiline && contentHeight > chatInputMaxHeight ? "auto" : "hidden";
+  chatInput.style.minHeight = "";
+  chatInput.style.height = `${nextHeight}px`;
+}
+
+function setActiveChat(chatId: string | undefined): void {
+  if (!chatId) return;
+  const chat = chats[chatId];
+  if (!chat) return;
+
+  ensureOpenTab("chat", chatId);
+  activeChatId = chatId;
+  activeTerminalId = undefined;
+
+  showViewer("chat");
+  renderChatView();
+  renderOpenTabs();
+  renderChats();
+  renderTerminals();
+
+  requestAnimationFrame(() => {
+    chatInput.focus();
+  });
+}
+
 function setActiveTerminal(terminalId: string | undefined): void {
   if (!terminalId) return;
   const terminal = terminals[terminalId];
   if (!terminal) return;
 
-  saveActiveFile();
   ensureOpenTab("terminal", terminalId);
-  activeFileId = undefined;
+  activeChatId = undefined;
   activeTerminalId = terminalId;
 
   showViewer("terminal");
   renderTerminalView();
   renderOpenTabs();
-  renderSidebarStates();
+  renderChats();
   renderTerminals();
 
   requestAnimationFrame(() => {
     terminalScreen.focus();
   });
+}
+
+function createChatSession(): void {
+  const id = `chat-${++chatCounter}`;
+  const matchingChatCount = Object.keys(chats).length;
+  const name = matchingChatCount > 0 ? `chat ${matchingChatCount + 1}` : "chat";
+
+  chats[id] = {
+    id,
+    model: chatModelSelect.value || "5.5 Extra High",
+    name,
+    prompt: ""
+  };
+
+  setActiveChat(id);
 }
 
 async function createTerminalSession(): Promise<void> {
@@ -1062,7 +815,7 @@ async function createTerminalSession(): Promise<void> {
 
   if (window.newideTerminal?.create) {
     try {
-      terminal = await window.newideTerminal.create({ cwd: activeProject?.path });
+      terminal = await window.newideTerminal.create();
     } catch (error: unknown) {
       const id = `terminal-${Date.now()}`;
       terminal = {
@@ -1112,87 +865,6 @@ async function createTerminalSession(): Promise<void> {
   }
 }
 
-function setActiveFile(fileId: string, { force = false }: { force?: boolean } = {}): void {
-  const file = files[fileId];
-  if (!file) return;
-  ensureOpenTab("file", fileId);
-
-  if (fileId === activeFileId && !force) {
-    renderOpenTabs();
-    renderSidebarStates();
-    return;
-  }
-
-  saveActiveFile();
-  activeFileId = fileId;
-  activeTerminalId = undefined;
-
-  isLoadingFile = true;
-  showViewer("text");
-  getViewer(file).render(file);
-  renderOpenTabs();
-  renderSidebarStates();
-  renderTerminals();
-  requestAnimationFrame(() => {
-    isLoadingFile = false;
-  });
-}
-
-async function openProjectFile(filePath: string | undefined): Promise<void> {
-  if (!filePath) return;
-
-  if (!files[filePath]) {
-    if (!window.newideProject?.readFile) return;
-
-    try {
-      const projectFile = await window.newideProject.readFile(filePath);
-      files[filePath] = {
-        name: projectFile.name,
-        path: projectFile.path,
-        viewer: "text",
-        status: projectFile.readonly ? "preview" : "",
-        content: projectFile.content,
-        readonly: projectFile.readonly
-      };
-    } catch (error: unknown) {
-      files[filePath] = {
-        name: filePath.split(/[\\/]/).at(-1) || "File",
-        path: filePath,
-        viewer: "text",
-        status: "Error",
-        content: `Could not open this file.\n\n${getErrorMessage(error)}`,
-        readonly: true
-      };
-    }
-  }
-
-  expandParentsForPath(filePath);
-  renderProjectTree();
-  setActiveFile(filePath);
-}
-
-function closeFileTab(fileId: string): void {
-  const wasActive = fileId === activeFileId;
-  const tabIndex = openTabs.findIndex(
-    (tab) => tab.type === "file" && tab.id === fileId
-  );
-
-  if (wasActive) {
-    saveActiveFile();
-  }
-
-  openTabs = openTabs.filter((tab) => !(tab.type === "file" && tab.id === fileId));
-
-  if (wasActive) {
-    activeFileId = undefined;
-    activateOpenTab(openTabs[Math.min(tabIndex, openTabs.length - 1)]);
-    return;
-  }
-
-  renderOpenTabs();
-  renderSidebarStates();
-}
-
 function closeTerminalTab(terminalId: string | undefined): void {
   if (!terminalId) return;
   const wasActive = terminalId === activeTerminalId;
@@ -1200,9 +872,7 @@ function closeTerminalTab(terminalId: string | undefined): void {
     (tab) => tab.type === "terminal" && tab.id === terminalId
   );
 
-  openTabs = openTabs.filter(
-    (tab) => !(tab.type === "terminal" && tab.id === terminalId)
-  );
+  openTabs = openTabs.filter((tab) => !(tab.type === "terminal" && tab.id === terminalId));
 
   if (editingTerminalId === terminalId) {
     editingTerminalId = undefined;
@@ -1216,65 +886,34 @@ function closeTerminalTab(terminalId: string | undefined): void {
   if (wasActive) {
     activeTerminalId = undefined;
     activateOpenTab(openTabs[Math.min(tabIndex, openTabs.length - 1)]);
-    renderProjectTree();
     return;
   }
 
   renderOpenTabs();
   renderTerminals();
-  renderProjectTree();
 }
 
-async function loadProject(
-  project: ProjectDirectoryNode | null | undefined,
-  { openPreferred = false }: { openPreferred?: boolean } = {}
-): Promise<void> {
-  if (!project) return;
+function closeChatTab(chatId: string | undefined): void {
+  if (!chatId) return;
+  const wasActive = chatId === activeChatId;
+  const tabIndex = openTabs.findIndex((tab) => tab.type === "chat" && tab.id === chatId);
 
-  saveActiveFile();
-  activeProject = project;
-  files = {};
-  Object.keys(terminals).forEach((terminalId) => {
-    void window.newideTerminal?.dispose(terminalId);
-    disposeTerminalFrontend(terminals[terminalId]);
-  });
-  terminals = {};
-  openTabs = [];
-  activeFileId = undefined;
-  activeTerminalId = undefined;
-  editingTerminalId = undefined;
-  editingTerminalRenameTarget = undefined;
-  expandedFolders = new Set([project.path]);
+  openTabs = openTabs.filter((tab) => !(tab.type === "chat" && tab.id === chatId));
+  delete chats[chatId];
 
-  if (project.path.startsWith("demo:")) {
-    registerFallbackFiles(project);
+  if (wasActive) {
+    activeChatId = undefined;
+    activateOpenTab(openTabs[Math.min(tabIndex, openTabs.length - 1)]);
+    return;
   }
 
-  renderProjectTree();
   renderOpenTabs();
-  renderTerminals();
-  viewers.text.clear();
-  showHome();
-
-  if (openPreferred) {
-    const preferred = findPreferredFile(project);
-    if (preferred) await openProjectFile(preferred.path);
-  }
+  renderChats();
 }
 
-async function openProjectPicker(): Promise<void> {
-  if (!window.newideProject?.openFolder || isProjectPickerOpen) return;
-
-  isProjectPickerOpen = true;
-  setOpenProjectSelected(true);
-
-  try {
-    const project = await window.newideProject.openFolder();
-    if (project) await loadProject(project);
-  } finally {
-    isProjectPickerOpen = false;
-    setOpenProjectSelected(false);
-  }
+function requestTerminalCreation(): void {
+  if (!terminalCreationReady) return;
+  void createTerminalSession();
 }
 
 document.querySelectorAll<HTMLElement>("[data-window-action]").forEach((button) => {
@@ -1288,9 +927,14 @@ document.querySelectorAll<HTMLElement>("[data-sidebar-toggle]").forEach((button)
   button.addEventListener("click", toggleSidebar);
 });
 
-openProjectButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    void openProjectPicker();
+newChatButtons.forEach((button) => {
+  button.addEventListener("click", createChatSession);
+});
+
+newTerminalButtons.forEach((button) => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    requestTerminalCreation();
   });
 });
 
@@ -1304,23 +948,64 @@ updateDownloadButton.addEventListener("click", () => {
   void window.newideUpdate?.openDownload(updateDownloadUrl);
 });
 
-const terminalAddButton = document.querySelector<HTMLElement>(".terminal-add");
-
-function requestTerminalCreation(): void {
-  if (!terminalCreationReady) return;
-  void createTerminalSession();
-}
-
-terminalAddButton?.addEventListener("click", (event) => {
+chatComposer.addEventListener("submit", (event) => {
   event.preventDefault();
-  requestTerminalCreation();
 });
 
-terminalAddButton?.addEventListener("keydown", (event) => {
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== "NumpadEnter") return;
+  event.preventDefault();
+});
+
+chatInput.addEventListener("input", () => {
+  const chat = activeChatId ? chats[activeChatId] : undefined;
+  const prompt = normalizeChatPrompt(chatInput.value);
+  if (prompt !== chatInput.value) {
+    const selectionStart = chatInput.selectionStart ?? chatInput.value.length;
+    const normalizedSelectionStart = normalizeChatPrompt(
+      chatInput.value.slice(0, selectionStart)
+    ).length;
+    chatInput.value = prompt;
+    chatInput.setSelectionRange(normalizedSelectionStart, normalizedSelectionStart);
+  }
+
+  resizeChatInput();
+  if (!chat) return;
+  chat.prompt = prompt;
+});
+
+chatModelSelect.addEventListener("change", () => {
+  const chat = activeChatId ? chats[activeChatId] : undefined;
+  chatModelLabel.textContent = chatModelSelect.value;
+  if (!chat) return;
+  chat.model = chatModelSelect.value;
+});
+
+chatListRoot.addEventListener("click", (event) => {
+  const closeButton = closestElement<HTMLElement>(event.target, "[data-chat-close]");
+  if (closeButton) {
+    event.preventDefault();
+    closeChatTab(closeButton.dataset.chatClose);
+    return;
+  }
+
+  const chatButton = closestElement<HTMLElement>(event.target, "[data-chat-id]");
+  if (!chatButton?.dataset.chatId) return;
+
+  setActiveChat(chatButton.dataset.chatId);
+});
+
+chatListRoot.addEventListener("keydown", (event) => {
+  if (closestElement<HTMLElement>(event.target, "[data-chat-close]")) return;
+
+  const chatButton = closestElement<HTMLElement>(event.target, "[data-chat-id]");
+  if (!chatButton?.dataset.chatId) return;
+
   const isActivationKey = event.key === "Enter" || event.key === " ";
   if (!isActivationKey) return;
+
   event.preventDefault();
-  requestTerminalCreation();
+  setActiveChat(chatButton.dataset.chatId);
 });
 
 terminalListRoot.addEventListener("click", (event) => {
@@ -1374,28 +1059,6 @@ terminalListRoot.addEventListener("keydown", (event) => {
   setActiveTerminal(terminalButton.dataset.terminalId);
 });
 
-projectTreeRoot.addEventListener("click", (event) => {
-  const agentTerminalButton = closestElement<HTMLElement>(
-    event.target,
-    "[data-agent-terminal-id]"
-  );
-  if (agentTerminalButton?.dataset.agentTerminalId) {
-    setActiveTerminal(agentTerminalButton.dataset.agentTerminalId);
-    return;
-  }
-
-  const fileButton = closestElement<HTMLElement>(event.target, "[data-file-path]");
-  if (fileButton) {
-    void openProjectFile(fileButton.dataset.filePath);
-    return;
-  }
-
-  const folderButton = closestElement<HTMLElement>(event.target, "[data-folder-path]");
-  if (folderButton?.dataset.folderPath) {
-    toggleFolder(folderButton.dataset.folderPath);
-  }
-});
-
 terminalScreen.addEventListener("click", () => {
   if (activeTerminalId) terminals[activeTerminalId]?.xterm.focus();
 });
@@ -1405,17 +1068,13 @@ window.addEventListener("resize", () => {
 });
 
 if ("ResizeObserver" in window) {
-  new ResizeObserver(() => {
+  const layoutResizeObserver = new ResizeObserver(() => {
     fitTerminal(activeTerminalId ? terminals[activeTerminalId] : undefined);
-  }).observe(terminalScreen);
-}
+    resizeChatInput();
+  });
 
-editor.addEventListener("input", () => {
-  if (isLoadingFile || !activeFileId) return;
-  saveActiveFile();
-  files[activeFileId].status = "Unsaved changes";
-  updateLineNumbers();
-});
+  layoutResizeObserver.observe(terminalScreen);
+}
 
 document.addEventListener("keydown", (event) => {
   const isSidebarShortcut =
@@ -1430,6 +1089,8 @@ document.addEventListener("keydown", (event) => {
   toggleSidebar();
 });
 
+window.addEventListener("resize", resizeChatInput);
+
 function applyWindowState({ expanded }: WindowState): void {
   document.body.classList.toggle("window-expanded", expanded);
 }
@@ -1437,9 +1098,6 @@ function applyWindowState({ expanded }: WindowState): void {
 void window.newideWindow?.getState().then(applyWindowState);
 window.newideWindow?.onStateChange(applyWindowState);
 window.newideWindow?.onToggleSidebar(toggleSidebar);
-window.newideProject?.onFolderPickerClosed(() => {
-  setOpenProjectSelected(false);
-});
 
 window.newideTerminal?.onData(({ id, data }) => {
   appendTerminalOutput(id, data);
@@ -1452,7 +1110,6 @@ window.newideTerminal?.onExit(({ id, code }) => {
   terminal.exited = true;
   appendTerminalOutput(id, `\r\n[terminal exited${typeof code === "number" ? ` with code ${code}` : ""}]\r\n`);
   renderTerminals();
-  renderProjectTree();
 });
 
 window.newideTerminal?.onState(({ id, cwd, kind }) => {
@@ -1462,39 +1119,19 @@ window.newideTerminal?.onState(({ id, cwd, kind }) => {
   terminal.cwd = cwd;
   terminal.kind = kind;
 
-  if (kind === "codex") {
-    expandDirectoriesForPath(cwd);
-  }
-
   renderOpenTabs();
-  renderSidebarStates();
   renderTerminals();
-  renderProjectTree();
 });
 
-async function initializeEditor(): Promise<void> {
-  if (window.newideProject?.getDefault) {
-    try {
-      await loadProject(await window.newideProject.getDefault());
-      return;
-    } catch {
-      await loadProject(fallbackProject);
-      return;
-    }
-  }
-
-  await loadProject(fallbackProject);
-}
-
-async function initializeApp(): Promise<void> {
-  await initializeEditor();
+function initializeApp(): void {
+  showHome();
+  renderChats();
+  renderTerminals();
   scheduleUpdateChecks();
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => {
-    void initializeApp();
-  }, { once: true });
+  document.addEventListener("DOMContentLoaded", initializeApp, { once: true });
 } else {
-  void initializeApp();
+  initializeApp();
 }

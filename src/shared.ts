@@ -1,29 +1,3 @@
-export type ProjectNodeType = "directory" | "file";
-
-export interface ProjectFileNode {
-  type: "file";
-  name: string;
-  path: string;
-  status?: string;
-  content?: string;
-}
-
-export interface ProjectDirectoryNode {
-  type: "directory";
-  name: string;
-  path: string;
-  children: ProjectNode[];
-}
-
-export type ProjectNode = ProjectDirectoryNode | ProjectFileNode;
-
-export interface ProjectFileContents {
-  name: string;
-  path: string;
-  content: string;
-  readonly: boolean;
-}
-
 export interface WindowState {
   expanded: boolean;
 }
@@ -97,13 +71,6 @@ export interface NewideWindowApi {
   getState(): Promise<WindowState>;
   onStateChange(callback: (state: WindowState) => void): Unsubscribe;
   onToggleSidebar(callback: () => void): Unsubscribe;
-}
-
-export interface NewideProjectApi {
-  getDefault(): Promise<ProjectDirectoryNode>;
-  openFolder(): Promise<ProjectDirectoryNode | null>;
-  readFile(filePath: string): Promise<ProjectFileContents>;
-  onFolderPickerClosed(callback: () => void): Unsubscribe;
 }
 
 export interface NewideTerminalApi {
